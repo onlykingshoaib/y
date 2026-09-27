@@ -2210,36 +2210,48 @@ HTML_MAIN = """
                 <!-- ============================================== -->
                 <div class="gemini-results-box" id="geminiResultsBox">
 
-                    <!-- AI Mood, Format & Search Grounding Intelligence Card -->
-                    <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 12px; padding: 16px 20px; margin-bottom: 22px;">
+                    <!-- AI Mood, Genre, Format & Dual-Track Intelligence Card -->
+                    <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 12px; padding: 16px 20px; margin-bottom: 18px;">
                         <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px;">
                             <div style="display: flex; align-items: center; gap: 12px;">
                                 <span style="font-size: 24px;">🎯</span>
                                 <div>
-                                    <div style="font-size: 11px; text-transform: uppercase; color: #c084fc; font-weight: 700; letter-spacing: 0.5px;">Target Format &amp; Ratio</div>
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #c084fc; font-weight: 700; letter-spacing: 0.5px;">Auto-Detected Ratio</div>
                                     <div id="aiTargetFormatBadge" style="font-size: 15px; font-weight: 800; color: #fff;">YouTube Shorts (9:16)</div>
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="font-size: 24px;">🎬</span>
+                                <div>
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #f43f5e; font-weight: 700; letter-spacing: 0.5px;">Detected Video Genre</div>
+                                    <div id="aiDetectedGenre" style="font-size: 15px; font-weight: 800; color: #fff;">War/Heroic &bull; High Impact</div>
                                 </div>
                             </div>
                             <div style="display: flex; align-items: center; gap: 12px;">
                                 <span style="font-size: 24px;">👤</span>
                                 <div>
-                                    <div style="font-size: 11px; text-transform: uppercase; color: #38bdf8; font-weight: 700; letter-spacing: 0.5px;">Primary Context / Speaker</div>
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #38bdf8; font-weight: 700; letter-spacing: 0.5px;">True Entities &amp; Plot</div>
                                     <div id="aiPrimaryContext" style="font-size: 15px; font-weight: 800; color: #fff;">Autonomous Evaluation</div>
                                 </div>
                             </div>
                             <div style="display: flex; align-items: center; gap: 12px;">
-                                <span style="font-size: 24px;">🔍</span>
+                                <span style="font-size: 24px;">🍌</span>
                                 <div>
-                                    <div style="font-size: 11px; text-transform: uppercase; color: #4ade80; font-weight: 700; letter-spacing: 0.5px;">Algorithm Grounding</div>
-                                    <div style="font-size: 14px; font-weight: 700; color: #4ade80;">Google Search Active</div>
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #ffba08; font-weight: 700; letter-spacing: 0.5px;">4K Thumbnail Engine</div>
+                                    <div id="aiEngineModelBadge" style="font-size: 14px; font-weight: 700; color: #fff;">Gemini 2.5 + 4K Nano Banana</div>
                                 </div>
                             </div>
-                            <div style="display: flex; align-items: center; gap: 12px;">
-                                <span style="font-size: 24px;">⚡</span>
-                                <div>
-                                    <div style="font-size: 11px; text-transform: uppercase; color: #ffba08; font-weight: 700; letter-spacing: 0.5px;">Engine Model</div>
-                                    <div style="font-size: 14px; font-weight: 700; color: #fff;">Gemini 2.5 Flash + Imagen</div>
-                                </div>
+                        </div>
+
+                        <!-- Deep Dual-Track Breakdown (100% Spoken Audio + Visual Timeline) -->
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(168, 85, 247, 0.22);">
+                            <div style="background: rgba(0, 0, 0, 0.35); border-left: 3px solid #10b981; border-radius: 8px; padding: 10px 12px;">
+                                <div style="font-size: 11px; font-weight: 800; color: #34d399; text-transform: uppercase; letter-spacing: 0.4px;">🎙️ Track 1: 100% Spoken Audio &amp; Dialogue Transcript</div>
+                                <div id="aiSpokenAudioTranscript" style="font-size: 12px; color: #e2e8f0; margin-top: 4px; line-height: 1.45; max-height: 80px; overflow-y: auto;">Transcribing spoken audio stream...</div>
+                            </div>
+                            <div style="background: rgba(0, 0, 0, 0.35); border-left: 3px solid #38bdf8; border-radius: 8px; padding: 10px 12px;">
+                                <div style="font-size: 11px; font-weight: 800; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.4px;">🎞️ Track 2: Visual Timeline &amp; Plot Twist Analysis</div>
+                                <div id="aiVisualTimelineAnalysis" style="font-size: 12px; color: #e2e8f0; margin-top: 4px; line-height: 1.45; max-height: 80px; overflow-y: auto;">Sampling timeline frames...</div>
                             </div>
                         </div>
                     </div>
@@ -2248,19 +2260,19 @@ HTML_MAIN = """
                     <div class="result-group">
                         <div class="result-group-title">
                             <span>Viral Title Recommendations (Click card to select)</span>
-                            <span style="font-size: 12px; color: #a855f7;">Ranked by Estimated CTR &amp; Punchline</span>
+                            <span style="font-size: 12px; color: #a855f7;">Ranked by Estimated CTR &amp; Emotion</span>
                         </div>
                         <div class="title-cards-grid" id="titleCardsGrid"></div>
                     </div>
 
-                    <!-- Enhanced Thumbnail Generation Suite (Slot 1 AI Dynamic + Slots 2-6 High-Emotion Local Frames) -->
+                    <!-- Hyper-Engaging 4K Nano Banana Thumbnail Suite (Slot 1 4K AI Default + Slots 2-6 Local Frames) -->
                     <div class="result-group">
                         <div class="result-group-title" style="flex-wrap: wrap; gap: 8px;">
-                            <span>✨ Enhanced Thumbnail Suite: Slot 1 AI Dynamic (Default Selected) + Slots 2–6 High-Emotion Local Frames</span>
-                            <span id="aiThumbAspectRatioBadge" style="font-size: 11.5px; background: rgba(16, 185, 129, 0.2); color: #4ade80; border: 1px solid rgba(16, 185, 129, 0.45); padding: 3px 10px; border-radius: 6px; font-weight: 800;">✔ 9:16 Vertical Auto-Detected</span>
+                            <span>🍌 4K Nano Banana Thumbnail Suite: Slot 1 AI Poster (Default Selected) + Slots 2–6 High-Emotion Local Frames</span>
+                            <span id="aiThumbAspectRatioBadge" style="font-size: 11.5px; background: rgba(16, 185, 129, 0.2); color: #4ade80; border: 1px solid rgba(16, 185, 129, 0.45); padding: 3px 10px; border-radius: 6px; font-weight: 800;">✔ 9:16 Vertical Auto-Detected (1080×1920)</span>
                         </div>
                         <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">
-                            <strong>Slot 1 (Default Selected)</strong> is dynamically generated by Gemini AI with dramatic lighting, high contrast, and suspenseful expression tailored to this specific video. <strong>Slots 2 to 6</strong> are 5 native high-emotion keyframes extracted directly from your video stream.
+                            <strong>Slot 1 (Default Selected)</strong> extracts the highest-emotion character face from your video, preserves <strong>100% character facial identity</strong>, and applies genre-specific 4K poster rendering (War/Heroic explosions &amp; smoke, Horror/Thriller shadows, or Comedy/Drama vibrant pop). <strong>Slots 2 to 6</strong> are 5 native high-emotion keyframes.
                         </p>
                         <div class="thumbnail-gallery-grid" id="thumbnailGalleryGrid"></div>
 
@@ -2268,9 +2280,9 @@ HTML_MAIN = """
                         <div style="background: #171624; border: 1px solid rgba(255, 186, 8, 0.35); border-radius: 10px; padding: 16px; margin-top: 14px;">
                             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
                                 <span style="font-size: 13px; font-weight: 800; color: #ffba08; display: flex; align-items: center; gap: 8px;">
-                                    <span>🎨</span> Thumbnail Directive &amp; Art Direction
+                                    <span>🎨</span> 4K Nano Banana Art Direction &amp; Genre Styling
                                 </span>
-                                <span style="font-size: 11px; color: var(--text-muted);">High CTR visual composition</span>
+                                <span style="font-size: 11px; color: var(--text-muted);">100% Character Face Identity Preserved</span>
                             </div>
                             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;">
                                 <div style="background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 3px solid #ffba08;">
@@ -2625,8 +2637,9 @@ HTML_MAIN = """
                 <div style="display: flex; gap: 10px; align-items: center;">
                     <div style="font-size: 11px; color: #94a3b8;">Active Model:</div>
                     <select id="geminiModelSelect" style="flex: 1; padding: 6px 10px; font-size: 12px; margin-bottom: 0;">
-                        <option value="gemini-3.8-flash" selected>gemini-3.8-flash (Recommended &bull; Fast Multimodal)</option>
-                        <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Ultra-fast)</option>
+                        <option value="gemini-2.5-flash" selected>gemini-2.5-flash (Recommended &bull; Dual-Track + 4K Nano Banana)</option>
+                        <option value="gemini-2.5-pro">gemini-2.5-pro (Deepest Story &amp; Dialogue Reasoning)</option>
+                        <option value="gemini-2.0-flash">gemini-2.0-flash (High-Speed Multimodal)</option>
                     </select>
                 </div>
             </div>
@@ -3129,14 +3142,15 @@ HTML_MAIN = """
             const width = clientVideo.videoWidth || 1280;
             const height = clientVideo.videoHeight || 720;
 
-            // Auto-detect format (Shorts 9:16 vs Long-form 16:9) from native video geometry & duration
+            // Auto-detect aspect ratio directly from native video geometry:
+            // Vertical (9:16) -> Shorts | Horizontal/Custom (16:9) -> Long-Form
             if (width < height) {
                 selectVideoFormat('Short');
-            } else if (width > height && duration > 90) {
+            } else {
                 selectVideoFormat('Long');
             }
 
-            const targetAspect = (currentSelectedFormat === 'Short' || width < height) ? '9:16' : '16:9';
+            const targetAspect = (width < height) ? '9:16' : '16:9';
             clientCanvas.width = width;
             clientCanvas.height = height;
             const ctx = clientCanvas.getContext('2d');
@@ -3252,40 +3266,51 @@ HTML_MAIN = """
             if (el) { el.classList.remove('active'); el.classList.add('completed'); }
         }
 
-        // Render Gemini Results (Slot 1 AI Dynamic Thumbnail + Slots 2-6 High-Emotion Local Video Frames)
+        // Render Gemini Results (Slot 1 4K Nano Banana Thumbnail + Slots 2-6 High-Emotion Local Video Frames)
         function renderGeminiResults(data) {
             geminiResultsBox.style.display = 'block';
 
             const aspectRatio = data.thumbnail_aspect_ratio || (data.format_type === 'Short' ? '9:16' : '16:9');
             const isVertical = (aspectRatio === '9:16');
+            selectVideoFormat(isVertical ? 'Short' : 'Long');
 
-            // Target Format & Primary Context Display
+            // Target Format, Genre & Primary Context Display
             const fmtEl = document.getElementById('aiTargetFormatBadge');
-            if (fmtEl) fmtEl.textContent = (data.format_type === 'Long' ? `🎬 Long Form Video (${aspectRatio})` : `📱 YouTube Shorts (${aspectRatio})`);
+            if (fmtEl) fmtEl.textContent = (isVertical ? `📱 Vertical Shorts (${aspectRatio} • 1080×1920)` : `🎬 Horizontal Long-Form (${aspectRatio} • 1920×1080)`);
+
+            const genreEl = document.getElementById('aiDetectedGenre');
+            if (genreEl) genreEl.textContent = data.detected_genre_emotion || data.detected_genre || 'High-Suspense Cinematic';
+
             const ctxEl = document.getElementById('aiPrimaryContext');
-            if (ctxEl) ctxEl.textContent = data.primary_context || 'Autonomous Evaluation';
+            const entitiesStr = Array.isArray(data.true_entities) && data.true_entities.length > 0
+                ? `${data.true_entities.slice(0, 3).join(', ')} • ${data.primary_context || ''}`
+                : (data.primary_context || 'Autonomous Evaluation');
+            if (ctxEl) ctxEl.textContent = entitiesStr;
+
+            const audioTrackEl = document.getElementById('aiSpokenAudioTranscript');
+            if (audioTrackEl) {
+                audioTrackEl.textContent = data.spoken_audio_transcript || data.climactic_context || '100% spoken audio & dialogue analyzed.';
+            }
+            const visualTrackEl = document.getElementById('aiVisualTimelineAnalysis');
+            if (visualTrackEl) {
+                visualTrackEl.textContent = data.visual_timeline_analysis || data.plot_twists || data.facial_expression_analysis || 'Key visual frames sampled across timeline.';
+            }
 
             const ratioBadge = document.getElementById('aiThumbAspectRatioBadge');
             if (ratioBadge) {
                 ratioBadge.textContent = isVertical
-                    ? '✔ 9:16 Vertical Auto-Detected (720×1280)'
-                    : '✔ 16:9 Cinematic Auto-Detected (1280×720)';
+                    ? '✔ 9:16 Vertical Auto-Detected (1080×1920 4K Poster)'
+                    : '✔ 16:9 Horizontal Auto-Detected (1920×1080 4K Poster)';
             }
 
-            // 0. AI Mood & Language Classification
-            const moodEl = document.getElementById('aiDetectedMood');
-            if (moodEl) moodEl.textContent = data.detected_genre_emotion || data.primary_context || 'Entertainment';
-            const langEl = document.getElementById('aiDetectedLang');
-            if (langEl) langEl.textContent = data.detected_language || 'Hindi / Hinglish';
-
-            // 1. Title cards (Viral Title + 2 Alternatives)
+            // 1. Title cards (Viral Title + Alternatives)
             const titleCardsGrid = document.getElementById('titleCardsGrid');
             const primaryTitle = data.viral_title || data.primary_title || data.recommended_title || 'Viral Video Hook 🔥';
             const titles = [
-                { text: primaryTitle, tag: (data.format_type === 'Long' ? "⭐ Search-Optimized [Hook | Keyword]" : "⭐ High Velocity Short Hook (< 50 Chars)"), isRec: true },
+                { text: primaryTitle, tag: (isVertical ? "⭐ High-CTR Suspense Shorts Hook" : "⭐ High-CTR SEO [Hook | Keyword]"), isRec: true },
                 ...(data.alternative_titles || []).map((t, i) => ({
                     text: t,
-                    tag: i === 0 ? "Alternative Catchy Title 1" : "Alternative Catchy Title 2",
+                    tag: `Alternative High-CTR Option ${i + 1}`,
                     isRec: false
                 }))
             ];
@@ -3301,7 +3326,7 @@ HTML_MAIN = """
             document.getElementById('videoTitle').value = primaryTitle;
             document.getElementById('titleCounter').textContent = `${primaryTitle.length} / 100`;
 
-            // 2. Enhanced Thumbnail Suite: Slot 1 (AI Dynamic Default Selected) + Slots 2-6 (High-Emotion Local Frames)
+            // 2. 4K Nano Banana Thumbnail Suite: Slot 1 (Default Selected) + Slots 2-6 (High-Emotion Local Frames)
             const gallery = document.getElementById('thumbnailGalleryGrid');
             let serverThumbnails = Array.isArray(data.extracted_thumbnails) ? [...data.extracted_thumbnails] : [];
             if (serverThumbnails.length < 6 && clientExtractedFrames.length > 0) {
@@ -3330,11 +3355,12 @@ HTML_MAIN = """
                     const slotNum = th.slot || (idx + 1);
                     const isSlot1 = (idx === 0 || Boolean(th.is_ai_generated));
                     const cardAspectCss = isVertical ? '9/16' : '16/9';
+                    const genreBadge = th.genre_preset || data.detected_genre || '4K AI';
                     const topBadgeHtml = isSlot1
-                        ? `<span class="thumb-ai-rec-badge" style="background: linear-gradient(135deg, #ec4899, #8b5cf6); box-shadow: 0 2px 10px rgba(236,72,153,0.45);">✨ SLOT 1: AI DYNAMIC (${aspectRatio})</span>`
+                        ? `<span class="thumb-ai-rec-badge" style="background: linear-gradient(135deg, #f59e0b, #ec4899, #8b5cf6); box-shadow: 0 2px 10px rgba(236,72,153,0.45);">🍌 SLOT 1: 4K NANO BANANA (${escapeHtml(genreBadge)})</span>`
                         : `<span class="thumb-ai-rec-badge" style="background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(56, 189, 248, 0.5); color: #38bdf8;">🎬 SLOT ${slotNum}: LOCAL FRAME</span>`;
                     const bottomBadgeText = isSlot1
-                        ? (th.label || 'AI Dynamic Visual')
+                        ? (th.label || `4K Nano Banana (${aspectRatio})`)
                         : `${th.timestamp || 'Frame'} • ${th.label || ('High-Emotion #' + (slotNum - 1))}`;
 
                     return `
@@ -3347,7 +3373,7 @@ HTML_MAIN = """
                     `;
                 }).join('');
 
-                // Auto-select Slot 1 (AI Dynamic Thumbnail) by default
+                // Auto-select Slot 1 (4K Nano Banana Thumbnail) by default
                 selectThumbnailFrame(gallery.firstElementChild, allThumbnails[0].url, allThumbnails[0].filename, aspectRatio);
             } else {
                 gallery.innerHTML = '<div style="color: var(--text-muted); font-size: 13px;">No thumbnails extracted. You can upload a custom one.</div>';

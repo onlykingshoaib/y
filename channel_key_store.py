@@ -88,8 +88,8 @@ def _get_db_connection():
 
 def init_channel_key_db():
     """
-    Initializes channel_gemini_keys table and rehydrates from persistent backups
-    if the database is new or empty.
+    Initializes channel_gemini_keys table, purges any leftover unit-test rows,
+    and rehydrates from persistent backups if the database is new or empty.
     """
     try:
         conn = _get_db_connection()
@@ -102,6 +102,7 @@ def init_channel_key_db():
                     updated_at VARCHAR(64) NOT NULL
                 );
             """)
+            cur.execute("DELETE FROM channel_gemini_keys WHERE LOWER(channel_id) LIKE 'test_chan%'")
         else:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS channel_gemini_keys (
@@ -110,6 +111,7 @@ def init_channel_key_db():
                     updated_at TEXT NOT NULL
                 );
             """)
+            cur.execute("DELETE FROM channel_gemini_keys WHERE LOWER(channel_id) LIKE 'test_chan%'")
         conn.commit()
         conn.close()
         logger.info(f"Initialized channel_gemini_keys table (Mode: {_DB_MODE})")
