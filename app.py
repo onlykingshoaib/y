@@ -3242,6 +3242,8 @@ HTML_MAIN = """
             }
 
             URL.revokeObjectURL(objectUrl);
+        }
+
         // Ingestion Source Switcher (YouTube Video vs Local File)
         window.switchIngestSource = function(mode) {
             const btnYt = document.getElementById('btnIngestSourceYouTube');
