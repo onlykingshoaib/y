@@ -1737,7 +1737,7 @@ def analyze_youtube_video_with_gemini(
     # 3. Fetch 100% accurate spoken audio / transcript from YouTube
     transcript_text, snippets = fetch_youtube_video_transcript(video_id)
     if not transcript_text:
-        transcript_text = f"Context from YouTube Video '{yt_title}'. Video analyzed visually and contextually."
+        transcript_text = ""
 
     pref_thumb = (existing_video_meta.get("thumbnail") or "") if existing_video_meta else ""
     raw_frame_bgr, local_thumb_path = download_youtube_thumbnail_frame(video_id, preferred_url=pref_thumb)
@@ -1784,74 +1784,58 @@ def analyze_youtube_video_with_gemini(
     # 5. Dual-Track Multimodal Analysis with Gemini (Direct Video Ingestion / Vision + Dialogue)
     prompt_str = f"""
 You are the world's most elite YouTube Growth Strategist & Multimodal Video Analyst.
-You are analyzing an official YouTube video to produce structured, accurate, search-optimized metadata.
+Analyze this YouTube video completely and produce structured, factual, search-optimized metadata based solely on the actual video frames, spoken dialogue, and audio timeline.
 
 VIDEO SPECS:
 - Video ID: {video_id}
 - Target Format: {format_type} ({aspect_ratio})
 - Video Duration: {dur_seconds}s
-- Current YouTube Title: {yt_title}
-- Current Description: {yt_desc[:500]}
-- 100% SPOKEN AUDIO TRANSCRIPT / DIALOGUES:
+- Current Title: {yt_title}
+- Spoken Audio / Dialogue:
 \"\"\"{transcript_text[:12000]}\"\"\"
 
-CATEGORY-AGNOSTIC MULTIMODAL INSTRUCTIONS:
+CRITICAL CATEGORY-AGNOSTIC MULTIMODAL INSTRUCTIONS:
 1. CONTENT UNDERSTANDING:
-   - Deeply analyze what the video is actually about: main subject, key events, characters, gameplay or dialogue.
-   - Tone, topic, search intent, keywords, and whether it is gaming, film/animation, entertainment, education, etc.
-   - Do NOT generate generic metadata or fake claims. Avoid keyword stuffing. Ground everything in the actual video.
-2. TITLE: Accurate, relevant, clickable, search-friendly, natural under 70 characters.
-3. DESCRIPTION: Concise, useful narrative/gameplay overview, key chapter points/highlights, natural keywords, and CTA.
-4. HASHTAGS: Exactly 3 to 7 hyper-targeted hashtags specifically grounded in this video's topic.
-5. TAGS: Exactly 15 to 20 targeted, highly searchable keyword phrases based on topic, entities, search intent, and language.
-6. CATEGORY MAPPING: Assign the exact YouTube Category ID:
+   - Deeply analyze the actual video content: main subject, key events, true figures, gameplay or narrative.
+   - Ground everything strictly in the actual video. Do NOT use generic text, filler lines, or placeholders.
+2. TITLE: High-impact, relevant, clickable title strictly under 65 characters without cutting or truncation.
+3. DESCRIPTION: Factual 2-3 sentence summary of the exact events and narrative, followed by 3-5 clean hashtags.
+4. HASHTAGS: Exactly 3 to 5 hyper-relevant hashtags grounded in the video's actual topic.
+5. TAGS: 10-15 hyper-relevant niche keyword phrases based on the actual content and search intent.
+6. CATEGORY MAPPING: Accurate YouTube category numeric ID matching genre:
+   * 1: Film & Animation / Cinema / Story breakdowns
    * 20: Gaming (PUBG, BGMI, Free Fire, Minecraft, GTA, esports, etc.)
-   * 1: Film & Animation (Movie recaps, stories, cinema breakdowns)
-   * 24: Entertainment (General entertainment, viral clips, reactions)
-   * 23: Comedy (Funny moments, roasts, pranks)
    * 22: People & Blogs (Vlogs, daily content)
+   * 23: Comedy (Funny moments, roasts, pranks)
+   * 24: Entertainment (General entertainment, viral clips, reactions)
    * 26: Howto & Style (Tutorials, guides, lifehacks)
    * 27: Education (Educational, explainers, tutorials)
    * 28: Science & Technology (Tech reviews, coding, engineering)
-7. TIMESTAMPS: Generate timestamps ONLY when the video contains meaningful sections (e.g. 00:00 Intro, 01:15 Section 1). If the video does not have meaningful chapters, return an empty array []. Never invent timestamps.
-8. THUMBNAIL: High-contrast, cinematic concept based on actual video context.
+7. TIMESTAMPS: Return timestamps ONLY if the video has distinct sections. If none, return []. Never invent fake chapters.
+8. POSTER PROMPT: Ultra-detailed visual prompt for 4K cinematic thumbnail poster based on the actual visual cues.
 
 Return STRICT JSON ONLY with these EXACT keys:
 {{
-  "title": "Natural, clickable, search-friendly title under 70 characters",
-  "description": "Engaging description with context, search intent, narrative highlights, natural keywords, and CTA",
-  "hashtags": ["#Tag1", "#Tag2", "#Tag3"],
-  "tags": ["15 to 20 search-intent tags specific to the video content"],
-  "category_id": "Valid YouTube Category ID (e.g., 1, 20, 24, 23, 22, 26, 27, 28)",
-  "language": "Hindi / Hinglish / English",
-  "summary": "Clear, grounded 2-3 sentence summary of what the video is actually about",
-  "timestamps": [
-    {{
-      "time": "00:00",
-      "label": "Introduction"
-    }}
-  ],
+  "title": "High-impact title strictly under 65 characters without truncation",
+  "category_id": "Exact YouTube category numeric ID (e.g. 1, 20, 22, 23, 24, 26, 27, 28)",
+  "description": "Factual 2-3 sentence summary of exact events followed by 3-5 hashtags",
+  "tags": ["10-15 hyper-relevant niche keywords"],
+  "poster_prompt": "Ultra-detailed visual prompt for 4K cinematic thumbnail poster",
+  "thumbnail_prompt": "Ultra-detailed visual prompt for 4K cinematic thumbnail poster",
   "thumbnail_concept": "High-contrast cinematic visual concept based on actual content",
-  "thumbnail_prompt": "Detailed AI image generation prompt for 4K movie-poster style thumbnail",
-  "confidence": {{
-    "content": 0.95,
-    "category": 0.92,
-    "metadata": 0.95
-  }},
+  "hashtags": ["#Tag1", "#Tag2", "#Tag3"],
+  "language": "Hindi / English",
+  "summary": "Clear, grounded 2-3 sentence factual summary of what the video is actually about",
+  "timestamps": [],
   "detected_genre": "Gaming or Film & Animation or Action",
   "detected_genre_emotion": "Genre • Tone",
-  "primary_context": "Core subject or game",
+  "primary_context": "Core subject or figure",
   "climactic_context": "Decisive turning point or climax",
-  "spoken_audio_transcript": "Grounded summary of spoken dialogue or observed audio",
-  "true_entities": ["Main Entity 1", "Main Entity 2"],
-  "plot_twists": "Key dramatic shift or climax",
-  "visual_timeline_analysis": "Visual action and tone",
-  "facial_expression_analysis": "Character facial expression or action intensity",
-  "viral_title": "Primary hook title under 70 characters",
+  "viral_title": "High-impact title strictly under 65 characters",
   "alternative_titles": [
-    "Alternative Title 1",
-    "Alternative Title 2",
-    "Alternative Title 3"
+    "Alternative High-CTR Option 1",
+    "Alternative High-CTR Option 2",
+    "Alternative High-CTR Option 3"
   ],
   "thumbnail_directive": {{
     "text_overlay": "3-4 word 3D hook typography in ALL CAPS",
@@ -1941,49 +1925,50 @@ Return STRICT JSON ONLY with these EXACT keys:
 
     # Fallback metadata if needed
     if not metadata:
-        clean_name = re.sub(r'[^\w\s-]', '', yt_title).strip() or "Viral Story"
+        clean_name = re.sub(r'[^\w\s-]', '', yt_title).strip() or "YouTube Video"
         preset = _resolve_genre_dramatic_preset("", clean_name, "", "", len(clean_name))
         detected_genre = preset["genre_category"]
         short_hook = " ".join(clean_name.split()[:3]).upper() or "MUST WATCH"
         viral_title = (
-            f"{clean_name}: Wait For The Twist! 😱 #Shorts #Viral"
+            f"{clean_name} | {detected_genre} Explained"
             if format_type == "Short"
-            else f"{clean_name} — Full Story & Breakdown | Must Watch"
+            else f"{clean_name} — {detected_genre} Story Breakdown"
         )
         fallback_tags = [
             clean_name.lower(), detected_genre.replace('/', ' ').lower(),
-            "youtube shorts" if format_type == "Short" else "full story explained",
-            "viral video", "trending", "must watch", "shocking twist", "emotional story"
+            "youtube video", "story explained", "breakdown"
         ]
-        fallback_desc = f"🔥 {clean_name} — Watch till the very end for the unbelievable twist!\n\nContext: {transcript_text[:300]}...\n\n#Shorts #Trending #Viral"
+        fallback_desc = f"{clean_name} — {detected_genre} narrative overview.\n\n#Trending #Video #Story"
         metadata = {
             "detected_genre": detected_genre,
-            "detected_genre_emotion": f"{detected_genre} • High Suspense",
-            "detected_language": "Hindi / Hinglish",
+            "detected_genre_emotion": f"{detected_genre} • High Impact",
+            "detected_language": "Hindi / English",
             "primary_context": clean_name,
-            "climactic_context": f"Decisive climax in {clean_name}",
+            "climactic_context": f"Key moments in {clean_name}",
             "spoken_audio_transcript": transcript_text[:400],
             "true_entities": [clean_name],
-            "plot_twists": f"Dramatic twist in {clean_name}",
+            "plot_twists": f"Key moments in {clean_name}",
             "visual_timeline_analysis": f"Visuals sampled from YouTube video ({aspect_ratio}).",
-            "facial_expression_analysis": "Intense expressive emotion at peak dramatic moment",
+            "facial_expression_analysis": "Expressive emotion at peak moment",
             "viral_title": viral_title,
             "alternative_titles": [
-                f"Nobody Expected This In {clean_name}! 🔥",
-                f"The Untold Story: {clean_name} 🎯",
-                f"Wait Till The End: {clean_name} ⚡"
+                f"{clean_name} — Full Breakdown",
+                f"{clean_name} Explained",
+                f"{clean_name} Story Analysis"
             ],
             "description": fallback_desc,
-            "hashtags": ["#Shorts", "#Trending", "#Viral", "#MustWatch"],
+            "hashtags": ["#Trending", "#Video", "#Story"],
             "search_tags": fallback_tags,
             "category_id": category_id or "24",
             "category_name": "Entertainment",
+            "poster_prompt": f"4K cinematic poster for {clean_name}, {detected_genre}, intense dramatic lighting",
+            "thumbnail_prompt": f"4K cinematic poster for {clean_name}, {detected_genre}, intense dramatic lighting",
             "thumbnail_directive": {
                 "text_overlay": short_hook,
                 "visual_scene_direction": f"4K {detected_genre} movie poster composition with character face",
                 "recommended_color_theme": "High-contrast cinematic lighting"
             },
-            "summary_insights": f"Pre-processed YouTube Video {video_id} analyzed. Ready for 1-click publishing."
+            "summary_insights": f"YouTube Video {video_id} analyzed. Ready for 1-click publishing."
         }
 
     # 6. Generate SLOT 1 (DEFAULT SELECTED) 4K Nano Banana Movie Poster Thumbnail (Optional Stage)
@@ -2008,14 +1993,10 @@ Return STRICT JSON ONLY with these EXACT keys:
     detected_g = metadata.get("detected_genre") or metadata.get("detected_genre_emotion") or ""
     cat_id, cat_name = map_genre_to_youtube_category(detected_g, metadata.get("category_id") or category_id)
 
-    # Normalize Title & strictly enforce under 70 characters
+    # Use pure AI-generated title directly without manual mid-word cutting or slicing
     norm_title = str(metadata.get("title") or metadata.get("viral_title") or yt_title).strip()
-    if len(norm_title) > 70:
-        truncated = norm_title[:70]
-        if " " in truncated:
-            norm_title = truncated.rsplit(" ", 1)[0].strip()
-        else:
-            norm_title = truncated.strip()
+    if len(norm_title) > 65 and " " in norm_title[:65]:
+        norm_title = norm_title[:65].rsplit(" ", 1)[0].strip()
 
     # Ensure alternative titles stay strictly under 70 characters
     if "alternative_titles" in metadata and isinstance(metadata["alternative_titles"], list):
@@ -2082,7 +2063,9 @@ Return STRICT JSON ONLY with these EXACT keys:
     metadata["summary"] = str(metadata.get("summary") or metadata.get("spoken_audio_transcript") or norm_desc[:250])
     metadata["timestamps"] = clean_timestamps
     metadata["thumbnail_concept"] = str(metadata.get("thumbnail_concept") or (metadata.get("thumbnail_directive") or {}).get("visual_scene_direction") or "High contrast dramatic composition")
-    metadata["thumbnail_prompt"] = str(metadata.get("thumbnail_prompt") or "Cinematic 4K movie poster style thumbnail with dramatic chiaroscuro lighting")
+    poster_pr = str(metadata.get("poster_prompt") or metadata.get("thumbnail_prompt") or "Cinematic 4K movie poster style thumbnail with dramatic chiaroscuro lighting")
+    metadata["poster_prompt"] = poster_pr
+    metadata["thumbnail_prompt"] = poster_pr
     metadata["confidence"] = metadata.get("confidence") if isinstance(metadata.get("confidence"), dict) else {
         "content": 0.95,
         "category": 0.92,

@@ -3867,10 +3867,10 @@ HTML_MAIN = """
             document.getElementById('aiSummaryInsights').textContent = data.summary_insights || 'Individual video evaluation completed via Gemini Multimodal Models.';
 
             // Populate Bottom AI Thumbnail Chat Engine with character visual prompt
-            let autoPrompt = data.thumbnail_prompt || (data.thumbnail_directive && data.thumbnail_directive.visual_scene_direction);
+            let autoPrompt = data.poster_prompt || data.thumbnail_prompt || (data.thumbnail_directive && data.thumbnail_directive.visual_scene_direction);
             if (!autoPrompt || autoPrompt.length < 15) {
                 const genre = data.detected_genre || "Cinematic Action";
-                const charContext = data.primary_context || "Main Character";
+                const charContext = data.primary_context || "Main Subject";
                 autoPrompt = `4K cinematic movie poster featuring ${charContext}, intense facial expression with dramatic eye contact, ${genre} atmosphere, high-contrast chiaroscuro shadows, volumetric backlighting, cinematic flying sparks, photorealistic 4K blockbuster grade`;
             }
             const promptInput = document.getElementById('bottomThumbPromptInput');
