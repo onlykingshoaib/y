@@ -5276,6 +5276,8 @@ def publish_optimized_video():
         thumb_updated = False
         thumb_err = None
         if thumbnail_filename:
+            if '/' in thumbnail_filename or '\\' in thumbnail_filename:
+                thumbnail_filename = os.path.basename(thumbnail_filename)
             thumb_path = os.path.join(gemini_engine.THUMBNAILS_DIR, secure_filename(thumbnail_filename))
             if os.path.exists(thumb_path):
                 try:
