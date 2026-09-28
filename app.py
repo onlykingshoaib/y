@@ -4725,6 +4725,7 @@ def channel_info():
 
 @app.route('/api/recent_videos')
 @app.route('/api/youtube/channel_videos')
+@app.route('/api/channel/videos')
 def recent_videos():
     creds = get_stored_credentials()
     if not creds:
