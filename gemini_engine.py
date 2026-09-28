@@ -2111,6 +2111,7 @@ Return a STRICT JSON object with these EXACT keys:
     metadata["extracted_thumbnails"] = [slot_1_ai_thumb, slot_2_thumb]
     metadata["selected_thumbnail"] = slot_1_ai_thumb
     metadata["tags"] = clean_tags[:30]
+    metadata["title"] = str(metadata.get("viral_title") or yt_title)
     metadata["recommended_title"] = str(metadata.get("viral_title") or yt_title)
     metadata["primary_title"] = str(metadata.get("viral_title") or yt_title)
 
