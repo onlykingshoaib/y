@@ -1097,50 +1097,12 @@ def generate_dynamic_ai_thumbnail(
             auto_face_bgr = extract_character_face_reference_crop(reference_frame_bgr, reference_face_box)
             face_ref_pil = Image.fromarray(cv2.cvtColor(auto_face_bgr, cv2.COLOR_BGR2RGB))
 
-    # Attempt 1: Nano Banana (gemini-3.1-flash-image / gemini-3-pro-image / gemini-2.5-flash-image) + Imagen API
+    # Attempt 1: Targeted Fast Imagen / Gemini Image Generation
     try:
         from google.genai import types
 
         def _try_nano_banana_or_imagen(client):
-            contents_payload = []
-            if face_ref_pil is not None:
-                contents_payload.append(face_ref_pil)
-            if full_ref_pil is not None:
-                contents_payload.append(full_ref_pil)
-            contents_payload.append(nano_banana_prompt)
-
-            for img_model in NANO_BANANA_IMAGE_MODELS:
-                for use_img_cfg in [True, False]:
-                    try:
-                        if use_img_cfg and hasattr(types, "ImageConfig"):
-                            cfg_obj = types.GenerateContentConfig(
-                                response_modalities=["IMAGE", "TEXT"],
-                                image_config=types.ImageConfig(aspect_ratio=aspect_ratio)
-                            )
-                        else:
-                            cfg_obj = types.GenerateContentConfig(
-                                response_modalities=["IMAGE", "TEXT"]
-                            )
-
-                        resp = client.models.generate_content(
-                            model=img_model,
-                            contents=contents_payload,
-                            config=cfg_obj
-                        )
-                        if resp and getattr(resp, "candidates", None):
-                            for cand in resp.candidates:
-                                content = getattr(cand, "content", None)
-                                for part in (getattr(content, "parts", None) or []):
-                                    inline = getattr(part, "inline_data", None)
-                                    if inline and getattr(inline, "data", None):
-                                        img_bytes = inline.data
-                                        arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                                        decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                                        if decoded is not None and decoded.size > 0:
-                                            return (decoded, img_model)
-                    except Exception:
-                        continue
-
+            # Try official Imagen models first with quick single attempt
             for imagen_model in ["imagen-3.0-generate-002", "imagen-3.0-fast-generate-001"]:
                 try:
                     img_resp = client.models.generate_images(
@@ -1163,6 +1125,31 @@ def generate_dynamic_ai_thumbnail(
                                 return (decoded, imagen_model)
                 except Exception:
                     continue
+
+            # Quick attempt with gemini-2.5-flash-image if available
+            try:
+                contents_payload = []
+                if face_ref_pil is not None:
+                    contents_payload.append(face_ref_pil)
+                contents_payload.append(nano_banana_prompt)
+                resp = client.models.generate_content(
+                    model="gemini-2.5-flash-image",
+                    contents=contents_payload,
+                    config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
+                )
+                if resp and getattr(resp, "candidates", None):
+                    for cand in resp.candidates:
+                        content = getattr(cand, "content", None)
+                        for part in (getattr(content, "parts", None) or []):
+                            inline = getattr(part, "inline_data", None)
+                            if inline and getattr(inline, "data", None):
+                                img_bytes = inline.data
+                                arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                                decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                                if decoded is not None and decoded.size > 0:
+                                    return (decoded, "gemini-2.5-flash-image")
+            except Exception:
+                pass
 
             return (None, None)
 
@@ -1726,6 +1713,43 @@ Format suggestions clearly with labels like:
 # SUPERFAST YOUTUBE INGESTION & 4K MOVIE-POSTER THUMBNAIL SUITE
 # =====================================================================
 
+def map_genre_to_youtube_category(genre: Optional[str] = "", current_category_id: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Accurately maps detected genre / cinema story to valid YouTube Category ID and human name.
+    1: Film & Animation (Primary for movie explainers, war/heroic, horror, drama, action)
+    24: Entertainment (General entertainment, stories)
+    23: Comedy (Funny / humor)
+    20: Gaming (Video games)
+    27: Education (Documentary, explainer)
+    28: Science & Technology (Tech, sci-fi)
+    """
+    g = (genre or "").lower()
+    
+    # Cinema / Movie / Dramatic / Action / Thriller / Horror -> Film & Animation (1)
+    if any(k in g for k in ["film", "movie", "cinema", "animation", "anime", "action", "thriller", "horror", "war", "heroic", "soldier", "drama", "suspense", "mystery", "screenplay"]):
+        return ("1", "Film & Animation")
+    elif any(k in g for k in ["comedy", "funny", "humor", "prank", "satire"]):
+        return ("23", "Comedy")
+    elif any(k in g for k in ["game", "gaming", "playthrough"]):
+        return ("20", "Gaming")
+    elif any(k in g for k in ["tech", "science", "coding", "software", "ai", "gadget"]):
+        return ("28", "Science & Technology")
+    elif any(k in g for k in ["education", "learn", "explainer", "tutorial", "lesson", "how to"]):
+        return ("27", "Education")
+    elif current_category_id and str(current_category_id) in ["1", "24", "23", "20", "27", "28"]:
+        cat_names = {
+            "1": "Film & Animation",
+            "24": "Entertainment",
+            "23": "Comedy",
+            "20": "Gaming",
+            "27": "Education",
+            "28": "Science & Technology"
+        }
+        return (str(current_category_id), cat_names.get(str(current_category_id), "Entertainment"))
+    else:
+        return ("24", "Entertainment")
+
+
 def extract_youtube_video_id(url_or_id: str) -> Optional[str]:
     """Extracts the 11-character YouTube video ID from various URL formats or raw ID."""
     clean = (url_or_id or "").strip()
@@ -1881,6 +1905,19 @@ def analyze_youtube_video_with_gemini(
         raise ValueError(f"Invalid YouTube URL or Video ID: '{video_id_or_url}'")
 
     cfg = get_gemini_config(channel_id)
+    if not cfg["is_configured"]:
+        alt_ch = channel_key_store.get_first_authenticated_channel_id()
+        if alt_ch and alt_ch != channel_id:
+            cfg = get_gemini_config(alt_ch)
+            channel_id = alt_ch
+
+    if not cfg["is_configured"]:
+        # Check if any keys exist in the global store
+        all_avail = channel_key_store.get_channel_keys("default")
+        if all_avail:
+            cfg["api_key"] = all_avail[0]
+            cfg["is_configured"] = True
+
     if not cfg["is_configured"]:
         raise ValueError("Gemini API key is not configured. Please enter your API key in '⚙️ Configure API Key'.")
 
@@ -2151,16 +2188,41 @@ TASK:
         channel_id=channel_id
     )
 
+    # 7. Map Category & Finalize Metadata
+    detected_g = metadata.get("detected_genre") or metadata.get("detected_genre_emotion") or ""
+    cat_id, cat_name = map_genre_to_youtube_category(detected_g, category_id)
+
+    raw_tags = metadata.get("search_tags") or metadata.get("tags") or []
+    if isinstance(raw_tags, str):
+        clean_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+    elif isinstance(raw_tags, list):
+        clean_tags = [str(t).strip() for t in raw_tags if str(t).strip()]
+    else:
+        clean_tags = []
+
     metadata["video_id"] = video_id
     metadata["video_url"] = f"https://youtu.be/{video_id}"
     metadata["is_youtube_video"] = True
     metadata["privacy_status"] = privacy_status
     metadata["format_type"] = format_type
     metadata["thumbnail_aspect_ratio"] = aspect_ratio
+    metadata["category_id"] = cat_id
+    metadata["category_name"] = cat_name
     metadata["extracted_thumbnails"] = [slot_1_ai_thumb, slot_2_thumb]
     metadata["selected_thumbnail"] = slot_1_ai_thumb
-    metadata["tags"] = metadata.get("search_tags") or metadata.get("tags") or []
-    metadata["recommended_title"] = metadata.get("viral_title")
-    metadata["primary_title"] = metadata.get("viral_title")
-    return metadata
+    metadata["tags"] = clean_tags[:30]
+    metadata["recommended_title"] = str(metadata.get("viral_title") or yt_title)
+    metadata["primary_title"] = str(metadata.get("viral_title") or yt_title)
+
+    # Sanitize dictionary to guarantee 100% clean JSON serialization
+    def _sanitize(val):
+        if val is None or isinstance(val, (str, int, float, bool)):
+            return val
+        if isinstance(val, (list, tuple, set)):
+            return [_sanitize(x) for x in val]
+        if isinstance(val, dict):
+            return {str(k): _sanitize(v) for k, v in val.items()}
+        return str(val)
+
+    return _sanitize(metadata)
 

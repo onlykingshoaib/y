@@ -44,6 +44,20 @@ def add_no_cache_headers(response):
     response.headers["Expires"] = "0"
     return response
 
+@app.errorhandler(Exception)
+def handle_global_exception(e):
+    from werkzeug.exceptions import HTTPException
+    code = 500
+    msg = str(e)
+    if isinstance(e, HTTPException):
+        code = e.code or 500
+        msg = e.description or str(e)
+    if request.path.startswith('/api/'):
+        return jsonify({'error': msg or 'Server Error'}), code
+    if code >= 500:
+        print(f"[Global Server Error] {request.path}: {e}")
+    return jsonify({'error': msg or 'Server Error'}), code
+
 # Allow HTTP and relaxed scope matching for local testing
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
@@ -3277,19 +3291,51 @@ HTML_MAIN = """
             }
         };
 
+        // Safe JSON parsing helper to completely prevent 'Unexpected end of JSON input'
+        async function safeParseJson(res) {
+            let text = "";
+            try {
+                text = await res.text();
+            } catch (e) {
+                text = "";
+            }
+            let data = null;
+            if (text && text.trim()) {
+                try {
+                    data = JSON.parse(text);
+                } catch (parseErr) {
+                    data = { error: `Server returned non-JSON (HTTP ${res.status}): ${text.substring(0, 150)}` };
+                }
+            } else {
+                data = { error: `Server returned empty response (HTTP ${res.status}).` };
+            }
+            if (!res.ok) {
+                const msg = (data && data.error) ? data.error : `Request failed with HTTP status ${res.status}`;
+                const err = new Error(msg);
+                err.status = res.status;
+                err.data = data;
+                throw err;
+            }
+            return data;
+        }
+
+        window._cachedChannelVideos = window._cachedChannelVideos || {};
+        window._selectedChannelVideoMeta = null;
+
         // Load channel uploads into picker grid
         window.loadChannelVideosForPicker = async function() {
             const grid = document.getElementById('channelVideosPickerGrid');
             if (!grid) return;
             try {
                 const res = await fetch('/api/youtube/channel_videos');
-                const videos = await res.json();
+                const videos = await safeParseJson(res);
                 if (!Array.isArray(videos) || videos.length === 0) {
                     grid.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; grid-column: 1/-1; text-align: center; padding: 12px;">No channel uploads found. Please connect your YouTube account or paste any video URL above.</div>';
                     return;
                 }
 
                 grid.innerHTML = videos.map(v => {
+                    window._cachedChannelVideos[v.id] = v;
                     const isPriv = v.is_private_or_unlisted || v.privacy === 'PRIVATE' || v.privacy === 'UNLISTED';
                     const privBadge = isPriv
                         ? `<span style="background: rgba(244, 63, 94, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 800;">🔒 ${v.privacy}</span>`
@@ -3310,11 +3356,15 @@ HTML_MAIN = """
                                 </div>
                             </div>
                             <div style="font-size: 12px; font-weight: 700; color: #f1f5f9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(v.title)}</div>
+                            <div style="font-size: 11px; color: #a1a1aa; display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+                                <span style="font-family: monospace;">${escapeHtml(v.id)}</span>
+                                <span style="color: #ec4899; font-weight: 700; text-decoration: underline;">⚡ Select</span>
+                            </div>
                         </div>
                     `;
                 }).join('');
             } catch (e) {
-                grid.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; grid-column: 1/-1; text-align: center; padding: 12px;">Unable to fetch channel videos. You can paste any YouTube URL above.</div>';
+                grid.innerHTML = `<div style="color: var(--text-muted); font-size: 12px; grid-column: 1/-1; text-align: center; padding: 12px;">Notice: ${e.message}. You can paste any YouTube URL above.</div>`;
             }
         };
 
@@ -3330,6 +3380,7 @@ HTML_MAIN = """
             const input = document.getElementById('ytOptimizeUrlInput');
             if (input) input.value = `https://youtu.be/${videoId}`;
             selectVideoFormat(isShort ? 'Short' : 'Long');
+            window._selectedChannelVideoMeta = (window._cachedChannelVideos && window._cachedChannelVideos[videoId]) || null;
         };
 
         // Run YouTube Video Optimization
@@ -3368,20 +3419,16 @@ HTML_MAIN = """
                         body: JSON.stringify({
                             video_id: urlOrId,
                             format_type: currentSelectedFormat,
-                            instructions: document.getElementById('aiCustomPrompt') ? document.getElementById('aiCustomPrompt').value : ''
+                            instructions: document.getElementById('aiCustomPrompt') ? document.getElementById('aiCustomPrompt').value : '',
+                            existing_meta: window._selectedChannelVideoMeta || null
                         })
                     });
 
-                    if (!res.ok) {
-                        const errData = await res.json();
-                        throw new Error(errData.error || "Analysis failed");
-                    }
+                    const metadata = await safeParseJson(res);
+                    currentGeminiData = metadata;
 
                     setStepCompleted('step4');
                     setStepActive('step5');
-
-                    const metadata = await res.json();
-                    currentGeminiData = metadata;
 
                     setTimeout(() => {
                         setStepCompleted('step5');
@@ -3390,7 +3437,7 @@ HTML_MAIN = """
                     }, 500);
 
                 } catch (err) {
-                    alert("YouTube Optimization Error: " + err.message);
+                    alert("YouTube Optimization Notice: " + err.message);
                     btnRunYtOptimization.disabled = false;
                     if (stepsCont) stepsCont.style.display = 'none';
                 }
@@ -3707,8 +3754,8 @@ HTML_MAIN = """
                             body: JSON.stringify(payload)
                         });
 
-                        const data = await res.json();
-                        if (!res.ok || !data.success) {
+                        const data = await safeParseJson(res);
+                        if (!data.success) {
                             throw new Error(data.error || "Publish failed");
                         }
 
@@ -4881,16 +4928,16 @@ def recent_videos():
         if not video_items:
             return jsonify([])
 
-        # Batch fetch video durations
+        # Batch fetch full video metadata (snippet, contentDetails, status)
         v_ids = [item.get('snippet', {}).get('resourceId', {}).get('videoId') for item in video_items if item.get('snippet', {}).get('resourceId', {}).get('videoId')]
-        durations = {}
+        details_map = {}
         if v_ids:
             try:
-                v_res = youtube.videos().list(id=','.join(v_ids), part='contentDetails').execute()
+                v_res = youtube.videos().list(id=','.join(v_ids), part='snippet,contentDetails,status').execute()
                 for v in v_res.get('items', []):
-                    durations[v['id']] = v.get('contentDetails', {}).get('duration', '')
+                    details_map[v['id']] = v
             except Exception as de:
-                print(f"Notice fetching video durations: {de}")
+                print(f"Notice fetching video details: {de}")
 
         video_list = []
         for item in video_items:
@@ -4898,18 +4945,27 @@ def recent_videos():
             video_id = snip.get('resourceId', {}).get('videoId')
             if not video_id:
                 continue
-            dur_iso = durations.get(video_id, '')
+
+            full_v = details_map.get(video_id, {})
+            v_snip = full_v.get('snippet', snip)
+            v_cd = full_v.get('contentDetails', {})
+            v_st = full_v.get('status', item.get('status', {}))
+
+            dur_iso = v_cd.get('duration', '')
             dur_sec = gemini_engine.parse_iso8601_duration(dur_iso)
-            is_short = (dur_sec <= 60 and dur_sec > 0) or ('#shorts' in (snip.get('title') or '').lower())
-            privacy = item.get('status', {}).get('privacyStatus', 'public').upper()
-            t_obj = snip.get('thumbnails', {})
+            is_short = (dur_sec <= 60 and dur_sec > 0) or ('#shorts' in (v_snip.get('title') or '').lower())
+            privacy = v_st.get('privacyStatus', 'public').upper()
+            t_obj = v_snip.get('thumbnails', {})
             t_url = t_obj.get('high', {}).get('url') or t_obj.get('medium', {}).get('url') or t_obj.get('default', {}).get('url') or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
             video_list.append({
                 'id': video_id,
-                'title': snip.get('title', 'Untitled Video'),
-                'description': snip.get('description', ''),
-                'publishedAt': snip.get('publishedAt', ''),
+                'title': v_snip.get('title', 'Untitled Video'),
+                'description': v_snip.get('description', ''),
+                'tags': v_snip.get('tags', []),
+                'category_id': v_snip.get('categoryId', '24'),
+                'default_language': v_snip.get('defaultLanguage') or v_snip.get('defaultAudioLanguage') or '',
+                'publishedAt': v_snip.get('publishedAt', ''),
                 'thumbnail': t_url,
                 'privacy': privacy,
                 'is_private_or_unlisted': privacy in ['PRIVATE', 'UNLISTED'],
@@ -5084,76 +5140,81 @@ def gemini_chat():
 
 @app.route('/api/gemini/analyze_youtube_video', methods=['POST'])
 def gemini_analyze_youtube_video():
-    data = request.get_json(force=True, silent=True) or {}
-    url_or_id = (data.get('video_id') or data.get('video_url') or '').strip()
-    instructions = (data.get('instructions') or '').strip()
-    format_type = (data.get('format_type') or 'Auto').strip()
-    ch_id = get_active_channel_id_or_default(data.get('channel_id'))
-
-    if not url_or_id:
-        return jsonify({'error': 'Please provide a YouTube Video URL or Video ID'}), 400
-
-    vid = gemini_engine.extract_youtube_video_id(url_or_id)
-    if not vid:
-        return jsonify({'error': f"Invalid YouTube URL or ID: '{url_or_id}'"}), 400
-
-    yt_service = None
-    creds = get_stored_credentials()
-    if creds:
-        try:
-            yt_service = build('youtube', 'v3', credentials=creds)
-        except Exception:
-            yt_service = None
-
     try:
+        data = request.get_json(force=True, silent=True) or {}
+        url_or_id = (data.get('video_id') or data.get('video_url') or '').strip()
+        instructions = (data.get('instructions') or '').strip()
+        format_type = (data.get('format_type') or 'Auto').strip()
+        ch_id = get_active_channel_id_or_default(data.get('channel_id'))
+        existing_meta = data.get('existing_meta')
+
+        if not url_or_id:
+            return jsonify({'error': 'Please provide a YouTube Video URL or Video ID'}), 400
+
+        vid = gemini_engine.extract_youtube_video_id(url_or_id)
+        if not vid:
+            return jsonify({'error': f"Invalid YouTube URL or ID: '{url_or_id}'"}), 400
+
+        yt_service = None
+        creds = get_stored_credentials()
+        if creds:
+            try:
+                yt_service = build('youtube', 'v3', credentials=creds)
+            except Exception as se:
+                print(f"[YouTube Service Notice] {se}")
+                yt_service = None
+
         metadata = gemini_engine.analyze_youtube_video_with_gemini(
             video_id_or_url=vid,
             format_type=format_type,
             custom_instructions=instructions,
             channel_id=ch_id,
-            youtube_service=yt_service
+            youtube_service=yt_service,
+            existing_video_meta=existing_meta
         )
-        return jsonify(metadata)
+        return jsonify(metadata), 200
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Error in gemini_analyze_youtube_video: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e) or 'Failed to analyze YouTube video'}), 500
 
 @app.route('/api/youtube/publish_optimized_video', methods=['POST'])
 def publish_optimized_video():
-    creds = get_stored_credentials()
-    if not creds:
-        return jsonify({'error': 'Unauthorized. Please connect your YouTube account.'}), 401
-
-    data = request.get_json(force=True, silent=True) or {}
-    video_id = (data.get('video_id') or '').strip()
-    if not video_id:
-        return jsonify({'error': 'Missing video_id'}), 400
-
-    title = (data.get('title') or '').strip()
-    description = (data.get('description') or '').strip()
-    raw_tags = data.get('tags', [])
-    if isinstance(raw_tags, str):
-        tags = [t.strip() for t in raw_tags.split(',') if t.strip()]
-    elif isinstance(raw_tags, list):
-        tags = [str(t).strip() for t in raw_tags if str(t).strip()]
-    else:
-        tags = []
-
-    category_id = str(data.get('category_id') or '24')
-    privacy = (data.get('privacy') or 'public').lower()
-    if privacy not in ['public', 'unlisted', 'private']:
-        privacy = 'public'
-    made_for_kids = bool(data.get('made_for_kids', False))
-    thumbnail_filename = (data.get('thumbnail_filename') or '').strip()
-
     try:
+        creds = get_stored_credentials()
+        if not creds:
+            return jsonify({'error': 'Unauthorized. Please connect your YouTube account first.'}), 401
+
+        data = request.get_json(force=True, silent=True) or {}
+        video_id = (data.get('video_id') or '').strip()
+        if not video_id:
+            return jsonify({'error': 'Missing video_id parameter'}), 400
+
+        title = (data.get('title') or '').strip()
+        description = (data.get('description') or '').strip()
+        raw_tags = data.get('tags', [])
+        if isinstance(raw_tags, str):
+            tags = [t.strip() for t in raw_tags.split(',') if t.strip()]
+        elif isinstance(raw_tags, list):
+            tags = [str(t).strip() for t in raw_tags if str(t).strip()]
+        else:
+            tags = []
+
+        category_id = str(data.get('category_id') or '24')
+        privacy = (data.get('privacy') or 'public').lower()
+        if privacy not in ['public', 'unlisted', 'private']:
+            privacy = 'public'
+        made_for_kids = bool(data.get('made_for_kids', False))
+        thumbnail_filename = (data.get('thumbnail_filename') or '').strip()
+
         youtube = build('youtube', 'v3', credentials=creds)
 
-        # 1. Update Video Metadata & Privacy (Publish Public)
+        # 1. Update Video Metadata & Privacy (Publish Public / Specified Privacy)
         body = {
             'id': video_id,
             'snippet': {
-                'title': title[:100],
+                'title': title[:100] if title else f"Video {video_id}",
                 'description': description[:5000],
                 'tags': tags[:50],
                 'categoryId': category_id
@@ -5169,31 +5230,39 @@ def publish_optimized_video():
             body=body
         ).execute()
 
-        # 2. Upload Thumbnail if provided
+        # 2. Upload 4K Nano Banana Thumbnail if provided
         thumb_updated = False
+        thumb_err = None
         if thumbnail_filename:
             thumb_path = os.path.join(gemini_engine.THUMBNAILS_DIR, secure_filename(thumbnail_filename))
             if os.path.exists(thumb_path):
                 try:
+                    from googleapiclient.http import MediaFileUpload
+                    media = MediaFileUpload(thumb_path, mimetype='image/jpeg', resumable=True)
                     youtube.thumbnails().set(
                         videoId=video_id,
-                        media_body=MediaFileUpload(thumb_path)
+                        media_body=media
                     ).execute()
                     thumb_updated = True
                 except Exception as te:
-                    print(f"Notice setting thumbnail: {te}")
+                    thumb_err = str(te)
+                    print(f"Notice setting thumbnail on YouTube: {te}")
 
         return jsonify({
             'success': True,
             'video_id': video_id,
             'video_url': f"https://youtu.be/{video_id}",
             'privacy': privacy,
+            'category_id': category_id,
             'thumbnail_updated': thumb_updated,
-            'message': f"Video successfully updated and published to YouTube as {privacy.upper()}!"
-        })
+            'thumbnail_notice': thumb_err,
+            'message': f"Video successfully optimized and published to YouTube as {privacy.upper()}!"
+        }), 200
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Error publishing video: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e) or 'Failed to publish optimized video'}), 500
 
 # ==============================================
 # YOUTUBE CHUNKED UPLOAD PIPELINE
