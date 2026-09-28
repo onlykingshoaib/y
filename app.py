@@ -1837,6 +1837,58 @@ HTML_MAIN = """
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
+                /* Dedicated Bottom AI Thumbnail Chat Engine Styles */
+        .bottom-thumb-chat-card {
+            background: linear-gradient(135deg, rgba(23, 17, 36, 0.95), rgba(30, 20, 50, 0.95));
+            border: 1px solid rgba(168, 85, 247, 0.45);
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-top: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+        .bottom-thumb-chat-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+            gap: 8px;
+            border-bottom: 1px solid rgba(168, 85, 247, 0.2);
+            padding-bottom: 10px;
+        }
+        .bottom-thumb-chat-body {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            align-items: flex-start;
+        }
+        .bottom-thumb-preview-box {
+            width: 100%;
+            height: 145px;
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px dashed rgba(168, 85, 247, 0.35);
+            border-radius: 10px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .verification-warning-banner {
+            background: rgba(245, 158, 11, 0.12);
+            border: 1px solid rgba(245, 158, 11, 0.4);
+            color: #fef08a;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 14px;
+            font-size: 13px;
+            line-height: 1.5;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         /* AI Movie-to-Shorts Auto-Clipper Styles */
         .clipper-card {
             background: #171321;
@@ -2472,8 +2524,76 @@ HTML_MAIN = """
                         <div id="aiSummaryInsights" style="font-size: 13px; color: #e9d5ff; line-height: 1.5;"></div>
                     </div>
 
+                    <!-- ============================================== -->
+                    <!-- DEDICATED BOTTOM AI THUMBNAIL CHAT ENGINE       -->
+                    <!-- ============================================== -->
+                    <div class="bottom-thumb-chat-card" id="bottomThumbChatEngine">
+                        <div class="bottom-thumb-chat-header">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 24px;">🎨</span>
+                                <div>
+                                    <div style="font-size: 15px; font-weight: 800; color: #f3e8ff;">
+                                        Dedicated AI Thumbnail Chat Assistant &amp; Auto-Prompt Engine
+                                    </div>
+                                    <div style="font-size: 11.5px; color: #c084fc;">
+                                        Auto-synthesizes visual prompts from characters &amp; mood &bull; Powered by <strong style="color: #ffba08;">gemini-3.1-flash-image</strong>
+                                    </div>
+                                </div>
+                            </div>
+                            <span class="tab-badge badge-ai" style="padding: 4px 10px; font-size: 11px;">4K POSTER INJECTION</span>
+                        </div>
+
+                        <!-- Verification Warning Banner (Hidden by default, shown if 403 uploadForbidden happens) -->
+                        <div id="thumbVerificationWarningBanner" class="verification-warning-banner" style="display: none;">
+                            <span style="font-size: 18px;">⚠️</span>
+                            <div>
+                                <strong>YouTube Phone Verification Required to set custom thumbnails:</strong>
+                                <span>Please visit <a href="https://www.youtube.com/verify" target="_blank" style="color: #fbbf24; text-decoration: underline; font-weight: 700;">youtube.com/verify</a> to unlock custom thumbnail uploads for your channel. (All metadata and video visibility have been saved successfully!)</span>
+                            </div>
+                        </div>
+
+                        <div class="bottom-thumb-chat-body">
+                            <!-- Left: Auto-Prompt & Controls -->
+                            <div style="flex: 1.4; min-width: 280px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                                    <span style="font-size: 12px; font-weight: 700; color: #e9d5ff;">✨ Auto-Synthesized Visual Prompt (Characters &amp; Mood):</span>
+                                    <span id="promptAutoStatus" style="font-size: 11px; color: #34d399; font-weight: 700;">✔ Auto-Generated by Gemini</span>
+                                </div>
+                                <textarea id="bottomThumbPromptInput" rows="3" placeholder="Gemini is synthesizing character visual prompt..." style="width: 100%; padding: 10px 12px; border-radius: 8px; background: rgba(0,0,0,0.5); border: 1px solid rgba(168, 85, 247, 0.4); color: #fff; font-size: 12.5px; line-height: 1.4; resize: none;"></textarea>
+
+                                <div style="display: flex; gap: 10px; margin-top: 10px; align-items: center; flex-wrap: wrap;">
+                                    <button type="button" id="btnBottomGenerateThumb" style="padding: 10px 18px; border-radius: 8px; border: none; background: linear-gradient(135deg, #a855f7, #ec4899); color: white; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 15px rgba(168, 85, 247, 0.35); transition: all 0.2s;">
+                                        <span>✨ Generate 4K AI Thumbnail</span>
+                                    </button>
+                                    <div id="thumbAutoInjectCountdown" style="display: none; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: #fbbf24; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); padding: 6px 12px; border-radius: 6px;">
+                                        <span class="spinner" style="width: 12px; height: 12px;"></span>
+                                        <span id="countdownText">Auto-attaching to Slot 1 in 2s...</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Right: Real-time 4K Preview Box -->
+                            <div style="flex: 1; min-width: 230px; display: flex; flex-direction: column; align-items: center;">
+                                <div style="font-size: 11.5px; font-weight: 700; color: #cbd5e1; margin-bottom: 6px; width: 100%; text-align: left;">
+                                    Live 4K Thumbnail Preview:
+                                </div>
+                                <div id="bottomThumbPreviewContainer" class="bottom-thumb-preview-box">
+                                    <img id="bottomThumbPreviewImg" src="" alt="4K AI Thumbnail Preview" style="display: none; width: 100%; height: 100%; object-fit: cover; border-radius: 8px;">
+                                    <div id="bottomThumbPlaceholder" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #94a3b8; text-align: center; padding: 16px;">
+                                        <span style="font-size: 28px; margin-bottom: 6px;">🍌</span>
+                                        <span style="font-size: 12px; font-weight: 600; color: #e2e8f0;">4K Nano Banana Preview</span>
+                                        <span style="font-size: 10.5px; color: #94a3b8; margin-top: 4px;">Displays immediately upon generation</span>
+                                    </div>
+                                </div>
+                                <div id="bottomThumbAttachedBadge" style="display: none; margin-top: 8px; font-size: 11.5px; font-weight: 800; color: #10b981; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); padding: 4px 12px; border-radius: 20px;">
+                                    ✔ Attached to Slot 1 for 1-Click Publishing!
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Actions Row -->
-                    <div class="ai-actions-row" style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px;">
+                    <div class="ai-actions-row"  style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px;">
                         <button type="button" class="btn-populate" id="btnPopulateToManual" style="flex: 1; min-width: 170px;">
                             <span>📝 Edit in Manual Studio</span>
                         </button>
@@ -3746,6 +3866,29 @@ HTML_MAIN = """
             // 9. Strategic Insights
             document.getElementById('aiSummaryInsights').textContent = data.summary_insights || 'Individual video evaluation completed via Gemini Multimodal Models.';
 
+            // Populate Bottom AI Thumbnail Chat Engine with character visual prompt
+            let autoPrompt = data.thumbnail_prompt || (data.thumbnail_directive && data.thumbnail_directive.visual_scene_direction);
+            if (!autoPrompt || autoPrompt.length < 15) {
+                const genre = data.detected_genre || "Cinematic Action";
+                const charContext = data.primary_context || "Main Character";
+                autoPrompt = `4K cinematic movie poster featuring ${charContext}, intense facial expression with dramatic eye contact, ${genre} atmosphere, high-contrast chiaroscuro shadows, volumetric backlighting, cinematic flying sparks, photorealistic 4K blockbuster grade`;
+            }
+            const promptInput = document.getElementById('bottomThumbPromptInput');
+            if (promptInput) promptInput.value = autoPrompt;
+
+            // Live 4K Preview Box display
+            const bottomPreviewImg = document.getElementById('bottomThumbPreviewImg');
+            const bottomPlaceholder = document.getElementById('bottomThumbPlaceholder');
+            const bottomAttachedBadge = document.getElementById('bottomThumbAttachedBadge');
+            if (allThumbnails.length > 0 && allThumbnails[0] && allThumbnails[0].url) {
+                if (bottomPreviewImg) {
+                    bottomPreviewImg.src = allThumbnails[0].url;
+                    bottomPreviewImg.style.display = 'block';
+                }
+                if (bottomPlaceholder) bottomPlaceholder.style.display = 'none';
+                if (bottomAttachedBadge) bottomAttachedBadge.style.display = 'inline-block';
+            }
+
             // Scroll to results smoothly
             geminiResultsBox.scrollIntoView({ behavior: 'smooth' });
         }
@@ -3801,6 +3944,95 @@ HTML_MAIN = """
                 if (btnRunYtOptimization) {
                     btnRunYtOptimization.dataset.forceRefresh = 'true';
                     btnRunYtOptimization.click();
+                }
+            });
+        }
+
+        // Dedicated Bottom AI Thumbnail Chat Assistant Listener
+        const btnBottomGenerateThumb = document.getElementById('btnBottomGenerateThumb');
+        if (btnBottomGenerateThumb) {
+            btnBottomGenerateThumb.addEventListener('click', async () => {
+                if (!currentGeminiData || !currentGeminiData.video_id) {
+                    alert("Please select and analyze a video first.");
+                    return;
+                }
+                const promptVal = (document.getElementById('bottomThumbPromptInput') ? document.getElementById('bottomThumbPromptInput').value.trim() : '');
+                btnBottomGenerateThumb.disabled = true;
+                const originalHtml = btnBottomGenerateThumb.innerHTML;
+                btnBottomGenerateThumb.innerHTML = `<span class="spinner" style="width:14px;height:14px;"></span> Generating 4K Thumbnail...`;
+
+                const countdownEl = document.getElementById('thumbAutoInjectCountdown');
+                const countdownText = document.getElementById('countdownText');
+                const attachedBadge = document.getElementById('bottomThumbAttachedBadge');
+                if (countdownEl) countdownEl.style.display = 'none';
+                if (attachedBadge) attachedBadge.style.display = 'none';
+
+                try {
+                    const res = await fetch('/api/pipeline/generate_thumbnail', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            video_id: currentGeminiData.video_id,
+                            prompt: promptVal,
+                            aspect_ratio: currentGeminiData.thumbnail_aspect_ratio || '16:9',
+                            format_type: currentGeminiData.format_type || 'Long'
+                        })
+                    });
+                    const respData = await safeParseJson(res);
+                    if (!respData.success || !respData.thumbnail) {
+                        throw new Error(respData.error || "Failed to generate thumbnail");
+                    }
+
+                    const newThumb = respData.thumbnail;
+                    // Immediately display 4K image in preview box
+                    const previewImg = document.getElementById('bottomThumbPreviewImg');
+                    const placeholder = document.getElementById('bottomThumbPlaceholder');
+                    if (previewImg) {
+                        previewImg.src = newThumb.url;
+                        previewImg.style.display = 'block';
+                    }
+                    if (placeholder) placeholder.style.display = 'none';
+
+                    // Start 2-second auto-injection countdown
+                    if (countdownEl && countdownText) {
+                        countdownEl.style.display = 'inline-flex';
+                        countdownText.textContent = 'Auto-attaching to Slot 1 in 2s...';
+                    }
+
+                    setTimeout(() => {
+                        // 2-second automatic injection into thumbnail slot
+                        selectedThumbnailFilename = newThumb.filename;
+                        const hiddenInput = document.getElementById('selectedThumbnailFilename');
+                        if (hiddenInput) hiddenInput.value = selectedThumbnailFilename;
+
+                        // Update gallery Slot 1 card
+                        const slot1Card = document.querySelector('.thumb-candidate-card');
+                        if (slot1Card) {
+                            document.querySelectorAll('.thumb-candidate-card').forEach(c => c.classList.remove('selected'));
+                            slot1Card.classList.add('selected');
+                            const img = slot1Card.querySelector('img');
+                            if (img) img.src = newThumb.url;
+                        }
+
+                        // Visual confirmation
+                        if (countdownEl) countdownEl.style.display = 'none';
+                        if (attachedBadge) attachedBadge.style.display = 'inline-block';
+                        const previewBox = document.getElementById('bottomThumbPreviewContainer');
+                        if (previewBox) previewBox.style.borderColor = '#10b981';
+
+                        const stageStatus = document.getElementById('thumbnailStageStatus');
+                        if (stageStatus) {
+                            stageStatus.textContent = '✔ Slot 1 Attached (Ready for 1-Click Publishing)';
+                            stageStatus.style.color = '#34d399';
+                            stageStatus.style.borderColor = '#10b981';
+                        }
+                    }, 2000);
+
+                } catch (err) {
+                    alert("Thumbnail Generation Notice: " + err.message);
+                } finally {
+                    btnBottomGenerateThumb.disabled = false;
+                    btnBottomGenerateThumb.innerHTML = originalHtml;
                 }
             });
         }
@@ -3955,7 +4187,16 @@ HTML_MAIN = """
                     btnApplyMetadata.innerHTML = `✔ Changes Saved (Privacy Preserved)`;
                     btnApplyMetadata.style.borderColor = '#10b981';
                     btnApplyMetadata.style.color = '#10b981';
-                    alert(`✅ Metadata successfully applied to YouTube!\n\nVideo: ${currentGeminiData.video_id}\nPrivacy status has been preserved (${currentGeminiData.privacy_status || 'current'}).\n${data.thumbnail_updated ? 'Thumbnail updated!' : ''}`);
+                    if (data.thumbnail_notice) {
+                        const warnBanner = document.getElementById('thumbVerificationWarningBanner');
+                        if (warnBanner) {
+                            warnBanner.style.display = 'flex';
+                            warnBanner.scrollIntoView({ behavior: 'smooth' });
+                        }
+                        alert(`⚠️ YouTube Phone Verification Required to set custom thumbnails (youtube.com/verify).\n\nAll other metadata and video settings were saved successfully!`);
+                    } else {
+                        alert(`✅ Metadata successfully applied to YouTube!\n\nVideo: ${currentGeminiData.video_id}\nPrivacy status has been preserved (${currentGeminiData.privacy_status || 'current'}).\n${data.thumbnail_updated ? 'Thumbnail updated!' : ''}`);
+                    }
                 } catch (err) {
                     updatePipelineStatus('error', err.message);
                     alert("Apply Error: " + err.message);
@@ -4041,7 +4282,16 @@ HTML_MAIN = """
                     updatePipelineStatus('published');
                     btnPublishPublic.innerHTML = `✔ Live on YouTube (Public)`;
                     btnPublishPublic.style.background = '#10b981';
-                    alert(`🎉 SUCCESS!\n\nVideo ${currentGeminiData.video_id} has been published PUBLIC on YouTube!\n\nLink: ${data.video_url}\n${data.thumbnail_updated ? 'Thumbnail updated!' : ''}`);
+                    if (data.thumbnail_notice) {
+                        const warnBanner = document.getElementById('thumbVerificationWarningBanner');
+                        if (warnBanner) {
+                            warnBanner.style.display = 'flex';
+                            warnBanner.scrollIntoView({ behavior: 'smooth' });
+                        }
+                        alert(`🎉 Video Published Public!\n\nLink: ${data.video_url}\n\n⚠️ YouTube Phone Verification Required to set custom thumbnails (youtube.com/verify).`);
+                    } else {
+                        alert(`🎉 SUCCESS!\n\nVideo ${currentGeminiData.video_id} has been published PUBLIC on YouTube!\n\nLink: ${data.video_url}\n${data.thumbnail_updated ? 'Thumbnail updated!' : ''}`);
+                    }
                     window.open(data.video_url, '_blank');
                 } catch (err) {
                     updatePipelineStatus('error', err.message);
@@ -5368,6 +5618,13 @@ def api_generate_thumbnail():
                 "primary_context": record.get("generated_title", f"Video {vid}"),
                 "detected_genre": "High-Suspense Cinematic"
             }
+
+        custom_prompt = (data.get('prompt') or '').strip()
+        if custom_prompt:
+            metadata["thumbnail_prompt"] = custom_prompt
+            if "thumbnail_directive" not in metadata:
+                metadata["thumbnail_directive"] = {}
+            metadata["thumbnail_directive"]["visual_scene_direction"] = custom_prompt
 
         save_pipeline_record(vid, {"thumbnail_status": "generating"})
 
