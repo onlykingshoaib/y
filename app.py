@@ -23,7 +23,6 @@ import google.auth.transport.requests
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import gemini_engine
-import clipper_engine
 import channel_key_store
 
 app = Flask(__name__)
@@ -2145,22 +2144,79 @@ HTML_MAIN = """
                     </div>
                 </div>
 
-                <!-- Video Dropzone for Gemini -->
-                <div class="form-group">
-                    <div class="ai-dropzone" id="aiVideoDropzone">
-                        <input type="file" id="aiVideoFileInput" accept="video/mp4,video/x-matroska,video/quicktime,video/webm">
-                        <svg class="ai-icon" viewBox="0 0 24 24"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
-                        <div style="font-size: 18px; font-weight: 700; color: #f3e8ff; margin-bottom: 6px;">
-                            Drag &amp; Drop Video to Ingest with Gemini AI
-                        </div>
-                        <div style="font-size: 13px; color: #c084fc;">
-                            Supports MP4, MKV, WebM, MOV &bull; Seconds to Hours &bull; Shorts (9:16) &amp; Long-Form (16:9)
-                        </div>
-                        <div class="selected-file-info" id="aiVideoFileInfo" style="color: #e9d5ff; font-weight: 600;"></div>
+                <!-- Ingestion Source Switcher -->
+                <div class="form-group" style="margin-bottom: 18px;">
+                    <div style="display: flex; gap: 10px; background: rgba(0,0,0,0.4); padding: 5px; border-radius: 12px; border: 1px solid rgba(168, 85, 247, 0.3);">
+                        <button type="button" id="btnIngestSourceYouTube" class="ingest-tab-btn active" onclick="switchIngestSource('youtube')" style="flex: 1; padding: 11px 16px; border-radius: 8px; border: none; font-weight: 700; font-size: 13.5px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, #a855f7, #ec4899); color: white; transition: all 0.2s;">
+                            <svg style="width: 18px; height: 18px; fill: currentColor;" viewBox="0 0 24 24"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
+                            <span>⚡ YouTube Video Optimizer (&lt; 30s • 4K Poster)</span>
+                        </button>
+                        <button type="button" id="btnIngestSourceLocal" class="ingest-tab-btn" onclick="switchIngestSource('local')" style="flex: 1; padding: 11px 16px; border-radius: 8px; border: none; font-weight: 700; font-size: 13.5px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; background: transparent; color: #a1a1aa; transition: all 0.2s;">
+                            <svg style="width: 18px; height: 18px; fill: currentColor;" viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
+                            <span>📁 Ingest Local Video File</span>
+                        </button>
                     </div>
                 </div>
 
-                <!-- Optional Creator Instructions -->
+                <!-- PANEL 1: YouTube Video Optimizer (Instant & Zero Server Bandwidth) -->
+                <div id="youtubeIngestPanel" style="display: block;">
+                    <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 12px; padding: 18px; margin-bottom: 16px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+                            <div style="font-size: 14.5px; font-weight: 800; color: #f3e8ff; display: flex; align-items: center; gap: 8px;">
+                                <span>🚀</span> 1-Click Fast Workflow: Upload Private to YouTube &amp; Optimize Here
+                            </div>
+                            <span style="font-size: 11px; background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700;">Zero Server Upload Bandwidth</span>
+                        </div>
+                        <div style="font-size: 12.5px; color: #d8b4fe; line-height: 1.5; margin-bottom: 14px;">
+                            Upload your Short or Long video directly to YouTube (Web or Mobile App) as <strong>"Private"</strong> or <strong>"Unlisted"</strong>. YouTube pre-processes 100% accurate Hindi/English auto-subtitles and duration. Paste URL or select below to generate a <strong>4K Nano Banana Movie Poster Thumbnail</strong> and publish Public in seconds!
+                        </div>
+
+                        <!-- URL Input & Button -->
+                        <div style="display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;">
+                            <input type="text" id="ytOptimizeUrlInput" placeholder="Paste YouTube Video URL or ID (e.g. https://youtu.be/xyz or 9psiSgSoZoc)..." style="flex: 1; min-width: 260px; padding: 12px 14px; font-size: 14px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 8px; color: white;">
+                            <button type="button" id="btnRunYtOptimization" class="btn-ai-analyze" style="width: auto; padding: 0 22px; margin-top: 0; white-space: nowrap;">
+                                <svg style="width: 18px; height: 18px; fill: white;" viewBox="0 0 24 24"><path d="M12 2l2.4 7.4h7.6l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4-6.2-4.5h7.6z"/></svg>
+                                <span>⚡ Ingest &amp; Generate 4K Poster (&lt; 30s)</span>
+                            </button>
+                        </div>
+
+                        <!-- Channel Uploads Picker -->
+                        <div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="font-size: 12px; font-weight: 700; color: #c084fc; text-transform: uppercase; letter-spacing: 0.5px;">Or Select From Your Channel Uploads:</span>
+                                <button type="button" onclick="loadChannelVideosForPicker()" style="background: transparent; border: none; color: #38bdf8; font-size: 11.5px; cursor: pointer; text-decoration: underline;">🔄 Refresh Videos</button>
+                            </div>
+                            <div id="channelVideosPickerGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 240px; overflow-y: auto; padding: 4px;">
+                                <div style="color: var(--text-muted); font-size: 12px; grid-column: 1/-1; text-align: center; padding: 12px;">Loading channel videos...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PANEL 2: Local Video File Ingest -->
+                <div id="localIngestPanel" style="display: none;">
+                    <div class="form-group">
+                        <div class="ai-dropzone" id="aiVideoDropzone">
+                            <input type="file" id="aiVideoFileInput" accept="video/mp4,video/x-matroska,video/quicktime,video/webm">
+                            <svg class="ai-icon" viewBox="0 0 24 24"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
+                            <div style="font-size: 18px; font-weight: 700; color: #f3e8ff; margin-bottom: 6px;">
+                                Drag &amp; Drop Video to Ingest with Gemini AI
+                            </div>
+                            <div style="font-size: 13px; color: #c084fc;">
+                                Supports MP4, MKV, WebM, MOV &bull; Seconds to Hours &bull; Shorts (9:16) &amp; Long-Form (16:9)
+                            </div>
+                            <div class="selected-file-info" id="aiVideoFileInfo" style="color: #e9d5ff; font-weight: 600;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Run AI Button for Local Files -->
+                    <button class="btn-ai-analyze" id="btnRunAiAnalysis" style="margin-top: 12px;">
+                        <svg style="width: 20px; height: 20px; fill: white;" viewBox="0 0 24 24"><path d="M12 2l2.4 7.4h7.6l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4-6.2-4.5h7.6z"/></svg>
+                        <span>Analyze Local Video &amp; Generate AI Thumbnail + Metadata</span>
+                    </button>
+                </div>
+
+                <!-- Shared Creator Guidance / Instructions -->
                 <div class="form-group" style="margin-top: 14px;">
                     <div class="form-label">
                         <span>Creative Direction / Specific Instructions (Optional)</span>
@@ -2168,12 +2224,6 @@ HTML_MAIN = """
                     </div>
                     <input type="text" id="aiCustomPrompt" placeholder="Add specific guidance or leave blank for automatic viral optimization...">
                 </div>
-
-                <!-- Run AI Button -->
-                <button class="btn-ai-analyze" id="btnRunAiAnalysis">
-                    <svg style="width: 20px; height: 20px; fill: white;" viewBox="0 0 24 24"><path d="M12 2l2.4 7.4h7.6l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4-6.2-4.5h7.6z"/></svg>
-                    <span>Analyze Video &amp; Generate AI Thumbnail + Metadata</span>
-                </button>
 
                 <!-- Dynamic Stepper Progress -->
                 <div class="ai-steps-container" id="aiStepsContainer">
@@ -3192,6 +3242,157 @@ HTML_MAIN = """
             }
 
             URL.revokeObjectURL(objectUrl);
+        // Ingestion Source Switcher (YouTube Video vs Local File)
+        window.switchIngestSource = function(mode) {
+            const btnYt = document.getElementById('btnIngestSourceYouTube');
+            const btnLoc = document.getElementById('btnIngestSourceLocal');
+            const panelYt = document.getElementById('youtubeIngestPanel');
+            const panelLoc = document.getElementById('localIngestPanel');
+
+            if (mode === 'youtube') {
+                if (btnYt) {
+                    btnYt.style.background = 'linear-gradient(135deg, #a855f7, #ec4899)';
+                    btnYt.style.color = 'white';
+                }
+                if (btnLoc) {
+                    btnLoc.style.background = 'transparent';
+                    btnLoc.style.color = '#a1a1aa';
+                }
+                if (panelYt) panelYt.style.display = 'block';
+                if (panelLoc) panelLoc.style.display = 'none';
+                loadChannelVideosForPicker();
+            } else {
+                if (btnLoc) {
+                    btnLoc.style.background = 'linear-gradient(135deg, #a855f7, #ec4899)';
+                    btnLoc.style.color = 'white';
+                }
+                if (btnYt) {
+                    btnYt.style.background = 'transparent';
+                    btnYt.style.color = '#a1a1aa';
+                }
+                if (panelLoc) panelLoc.style.display = 'block';
+                if (panelYt) panelYt.style.display = 'none';
+            }
+        };
+
+        // Load channel uploads into picker grid
+        window.loadChannelVideosForPicker = async function() {
+            const grid = document.getElementById('channelVideosPickerGrid');
+            if (!grid) return;
+            try {
+                const res = await fetch('/api/youtube/channel_videos');
+                const videos = await res.json();
+                if (!Array.isArray(videos) || videos.length === 0) {
+                    grid.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; grid-column: 1/-1; text-align: center; padding: 12px;">No channel uploads found. Please connect your YouTube account or paste any video URL above.</div>';
+                    return;
+                }
+
+                grid.innerHTML = videos.map(v => {
+                    const isPriv = v.is_private_or_unlisted || v.privacy === 'PRIVATE' || v.privacy === 'UNLISTED';
+                    const privBadge = isPriv
+                        ? `<span style="background: rgba(244, 63, 94, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 800;">🔒 ${v.privacy}</span>`
+                        : `<span style="background: rgba(16, 185, 129, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 800;">PUBLIC</span>`;
+                    const durBadge = v.is_short
+                        ? `<span style="background: rgba(168, 85, 247, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 800;">📱 Shorts</span>`
+                        : `<span style="background: rgba(56, 189, 248, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 800;">🎬 ${v.duration_text || 'Long'}</span>`;
+
+                    return `
+                        <div class="video-picker-item" onclick="selectChannelVideoForOptimization(this, '${escapeHtml(v.id)}', ${Boolean(v.is_short)})" style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 8px; padding: 8px; cursor: pointer; transition: all 0.2s; display: flex; flex-direction: column; gap: 6px;">
+                            <div style="position: relative; width: 100%; aspect-ratio: 16/9; border-radius: 6px; overflow: hidden; background: #000;">
+                                <img src="${v.thumbnail || ''}" alt="" style="width: 100%; height: 100%; object-fit: cover;">
+                                <div style="position: absolute; top: 4px; left: 4px; display: flex; gap: 4px;">
+                                    ${privBadge}
+                                </div>
+                                <div style="position: absolute; bottom: 4px; right: 4px;">
+                                    ${durBadge}
+                                </div>
+                            </div>
+                            <div style="font-size: 12px; font-weight: 700; color: #f1f5f9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(v.title)}</div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                grid.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; grid-column: 1/-1; text-align: center; padding: 12px;">Unable to fetch channel videos. You can paste any YouTube URL above.</div>';
+            }
+        };
+
+        window.selectChannelVideoForOptimization = function(cardEl, videoId, isShort) {
+            document.querySelectorAll('.video-picker-item').forEach(el => {
+                el.style.borderColor = 'rgba(168, 85, 247, 0.3)';
+                el.style.boxShadow = 'none';
+            });
+            if (cardEl) {
+                cardEl.style.borderColor = '#ec4899';
+                cardEl.style.boxShadow = '0 0 12px rgba(236, 72, 153, 0.5)';
+            }
+            const input = document.getElementById('ytOptimizeUrlInput');
+            if (input) input.value = `https://youtu.be/${videoId}`;
+            selectVideoFormat(isShort ? 'Short' : 'Long');
+        };
+
+        // Run YouTube Video Optimization
+        const btnRunYtOptimization = document.getElementById('btnRunYtOptimization');
+        if (btnRunYtOptimization) {
+            btnRunYtOptimization.addEventListener('click', async () => {
+                const urlInput = document.getElementById('ytOptimizeUrlInput');
+                const urlOrId = (urlInput ? urlInput.value : '').trim();
+                if (!urlOrId) {
+                    alert("Please paste a YouTube Video URL / ID or select one from your channel uploads below!");
+                    return;
+                }
+
+                btnRunYtOptimization.disabled = true;
+                const stepsCont = document.getElementById('aiStepsContainer');
+                const resultsBox = document.getElementById('geminiResultsBox');
+                if (stepsCont) stepsCont.style.display = 'block';
+                if (resultsBox) resultsBox.style.display = 'none';
+
+                // Update step titles for YouTube optimization
+                const s1 = document.getElementById('step1'); if (s1) { const span = s1.querySelector('span:last-child'); if (span) span.textContent = "Fetching 100% Accurate Spoken Dialogue Subtitles from YouTube"; }
+                const s2 = document.getElementById('step2'); if (s2) { const span = s2.querySelector('span:last-child'); if (span) span.textContent = "Downloading High-Res Reference Frame & Detecting Character Faces"; }
+                const s3 = document.getElementById('step3'); if (s3) { const span = s3.querySelector('span:last-child'); if (span) span.textContent = "Analyzing Ground-Truth Plot, Character Dynamic & Climactic Context via Gemini 2.5"; }
+                const s4 = document.getElementById('step4'); if (s4) { const span = s4.querySelector('span:last-child'); if (span) span.textContent = "Generating 4K Nano Banana Movie Poster Thumbnail (Slot 1 Default)"; }
+                const s5 = document.getElementById('step5'); if (s5) { const span = s5.querySelector('span:last-child'); if (span) span.textContent = "Auto-Selecting 4K Movie Poster & Preparing 1-Click 'Apply & Go PUBLIC'"; }
+
+                setStepActive('step1');
+                setTimeout(() => { setStepCompleted('step1'); setStepActive('step2'); }, 1200);
+                setTimeout(() => { setStepCompleted('step2'); setStepActive('step3'); }, 3500);
+                setTimeout(() => { setStepCompleted('step3'); setStepActive('step4'); }, 7500);
+
+                try {
+                    const res = await fetch('/api/gemini/analyze_youtube_video', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            video_id: urlOrId,
+                            format_type: currentSelectedFormat,
+                            instructions: document.getElementById('aiCustomPrompt') ? document.getElementById('aiCustomPrompt').value : ''
+                        })
+                    });
+
+                    if (!res.ok) {
+                        const errData = await res.json();
+                        throw new Error(errData.error || "Analysis failed");
+                    }
+
+                    setStepCompleted('step4');
+                    setStepActive('step5');
+
+                    const metadata = await res.json();
+                    currentGeminiData = metadata;
+
+                    setTimeout(() => {
+                        setStepCompleted('step5');
+                        renderGeminiResults(metadata);
+                        btnRunYtOptimization.disabled = false;
+                    }, 500);
+
+                } catch (err) {
+                    alert("YouTube Optimization Error: " + err.message);
+                    btnRunYtOptimization.disabled = false;
+                    if (stepsCont) stepsCont.style.display = 'none';
+                }
+            });
         }
 
         // Run Gemini Analysis
@@ -3476,7 +3677,51 @@ HTML_MAIN = """
         // One-Click Auto-Publish Button
         const btnOneClickPublish = document.getElementById('btnOneClickPublish');
         if (btnOneClickPublish) {
-            btnOneClickPublish.addEventListener('click', () => {
+            btnOneClickPublish.addEventListener('click', async () => {
+                if (currentGeminiData && currentGeminiData.is_youtube_video) {
+                    if (!confirm(`Apply 4K Nano Banana Movie Poster & publish video ${currentGeminiData.video_id} to PUBLIC now?`)) {
+                        return;
+                    }
+
+                    btnOneClickPublish.disabled = true;
+                    const originalHtml = btnOneClickPublish.innerHTML;
+                    btnOneClickPublish.innerHTML = `<span class="spinner" style="width:16px;height:16px;"></span> Publishing to YouTube...`;
+
+                    try {
+                        const payload = {
+                            video_id: currentGeminiData.video_id,
+                            title: document.getElementById('videoTitle').value,
+                            description: document.getElementById('videoDesc').value,
+                            tags: window.tags || [],
+                            category_id: document.getElementById('categorySelect').value,
+                            privacy: 'public',
+                            made_for_kids: document.getElementById('madeForKids').checked,
+                            thumbnail_filename: selectedThumbnailFilename
+                        };
+
+                        const res = await fetch('/api/youtube/publish_optimized_video', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        const data = await res.json();
+                        if (!res.ok || !data.success) {
+                            throw new Error(data.error || "Publish failed");
+                        }
+
+                        alert(`🎉 SUCCESS!\n\nVideo has been updated and published PUBLIC on YouTube!\n\nLink: ${data.video_url}\nThumbnail: 4K Nano Banana Poster Applied!`);
+                        window.open(data.video_url, '_blank');
+                        btnOneClickPublish.innerHTML = `✔ Live on YouTube (Public)`;
+                        btnOneClickPublish.style.background = '#10b981';
+                    } catch (err) {
+                        alert("Publish Error: " + err.message);
+                        btnOneClickPublish.disabled = false;
+                        btnOneClickPublish.innerHTML = originalHtml;
+                    }
+                    return;
+                }
+
                 window.switchWorkspaceTab('manual');
                 const form = document.getElementById('uploadForm');
                 if (form) form.dispatchEvent(new Event('submit'));
@@ -4101,6 +4346,7 @@ HTML_MAIN = """
 
             try {
                 loadRecentVideos();
+                loadChannelVideosForPicker();
             } catch (e) {
                 console.warn("loadRecentVideos warning:", e);
             }
@@ -4604,6 +4850,7 @@ def channel_info():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/recent_videos')
+@app.route('/api/youtube/channel_videos')
 def recent_videos():
     creds = get_stored_credentials()
     if not creds:
@@ -4625,24 +4872,52 @@ def recent_videos():
         pl_res = youtube.playlistItems().list(
             playlistId=uploads_id,
             part='snippet,status',
-            maxResults=8
+            maxResults=18
         ).execute()
 
+        video_items = pl_res.get('items', [])
+        if not video_items:
+            return jsonify([])
+
+        # Batch fetch video durations
+        v_ids = [item.get('snippet', {}).get('resourceId', {}).get('videoId') for item in video_items if item.get('snippet', {}).get('resourceId', {}).get('videoId')]
+        durations = {}
+        if v_ids:
+            try:
+                v_res = youtube.videos().list(id=','.join(v_ids), part='contentDetails').execute()
+                for v in v_res.get('items', []):
+                    durations[v['id']] = v.get('contentDetails', {}).get('duration', '')
+            except Exception as de:
+                print(f"Notice fetching video durations: {de}")
+
         video_list = []
-        for item in pl_res.get('items', []):
+        for item in video_items:
             snip = item.get('snippet', {})
             video_id = snip.get('resourceId', {}).get('videoId')
+            if not video_id:
+                continue
+            dur_iso = durations.get(video_id, '')
+            dur_sec = gemini_engine.parse_iso8601_duration(dur_iso)
+            is_short = (dur_sec <= 60 and dur_sec > 0) or ('#shorts' in (snip.get('title') or '').lower())
+            privacy = item.get('status', {}).get('privacyStatus', 'public').upper()
+            t_obj = snip.get('thumbnails', {})
+            t_url = t_obj.get('high', {}).get('url') or t_obj.get('medium', {}).get('url') or t_obj.get('default', {}).get('url') or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
             video_list.append({
                 'id': video_id,
-                'title': snip.get('title'),
-                'publishedAt': snip.get('publishedAt'),
-                'thumbnail': snip.get('thumbnails', {}).get('medium', {}).get('url', ''),
-                'privacy': item.get('status', {}).get('privacyStatus', 'public').upper()
+                'title': snip.get('title', 'Untitled Video'),
+                'description': snip.get('description', ''),
+                'publishedAt': snip.get('publishedAt', ''),
+                'thumbnail': t_url,
+                'privacy': privacy,
+                'is_private_or_unlisted': privacy in ['PRIVATE', 'UNLISTED'],
+                'duration_seconds': dur_sec,
+                'duration_text': f"{dur_sec // 60}:{dur_sec % 60:02d}" if dur_sec > 0 else ("< 60s" if is_short else ""),
+                'is_short': is_short
             })
         return jsonify(video_list)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    except Exception as e:
+        print(f"Error fetching channel videos: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ==============================================
@@ -4804,6 +5079,119 @@ def gemini_chat():
     ch_id = get_active_channel_id_or_default(data.get('channel_id'))
     res = gemini_engine.chat_with_gemini(message, studio_context=context, channel_id=ch_id)
     return jsonify(res)
+
+@app.route('/api/gemini/analyze_youtube_video', methods=['POST'])
+def gemini_analyze_youtube_video():
+    data = request.get_json(force=True, silent=True) or {}
+    url_or_id = (data.get('video_id') or data.get('video_url') or '').strip()
+    instructions = (data.get('instructions') or '').strip()
+    format_type = (data.get('format_type') or 'Auto').strip()
+    ch_id = get_active_channel_id_or_default(data.get('channel_id'))
+
+    if not url_or_id:
+        return jsonify({'error': 'Please provide a YouTube Video URL or Video ID'}), 400
+
+    vid = gemini_engine.extract_youtube_video_id(url_or_id)
+    if not vid:
+        return jsonify({'error': f"Invalid YouTube URL or ID: '{url_or_id}'"}), 400
+
+    yt_service = None
+    creds = get_stored_credentials()
+    if creds:
+        try:
+            yt_service = build('youtube', 'v3', credentials=creds)
+        except Exception:
+            yt_service = None
+
+    try:
+        metadata = gemini_engine.analyze_youtube_video_with_gemini(
+            video_id_or_url=vid,
+            format_type=format_type,
+            custom_instructions=instructions,
+            channel_id=ch_id,
+            youtube_service=yt_service
+        )
+        return jsonify(metadata)
+    except Exception as e:
+        print(f"Error in gemini_analyze_youtube_video: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/youtube/publish_optimized_video', methods=['POST'])
+def publish_optimized_video():
+    creds = get_stored_credentials()
+    if not creds:
+        return jsonify({'error': 'Unauthorized. Please connect your YouTube account.'}), 401
+
+    data = request.get_json(force=True, silent=True) or {}
+    video_id = (data.get('video_id') or '').strip()
+    if not video_id:
+        return jsonify({'error': 'Missing video_id'}), 400
+
+    title = (data.get('title') or '').strip()
+    description = (data.get('description') or '').strip()
+    raw_tags = data.get('tags', [])
+    if isinstance(raw_tags, str):
+        tags = [t.strip() for t in raw_tags.split(',') if t.strip()]
+    elif isinstance(raw_tags, list):
+        tags = [str(t).strip() for t in raw_tags if str(t).strip()]
+    else:
+        tags = []
+
+    category_id = str(data.get('category_id') or '24')
+    privacy = (data.get('privacy') or 'public').lower()
+    if privacy not in ['public', 'unlisted', 'private']:
+        privacy = 'public'
+    made_for_kids = bool(data.get('made_for_kids', False))
+    thumbnail_filename = (data.get('thumbnail_filename') or '').strip()
+
+    try:
+        youtube = build('youtube', 'v3', credentials=creds)
+
+        # 1. Update Video Metadata & Privacy (Publish Public)
+        body = {
+            'id': video_id,
+            'snippet': {
+                'title': title[:100],
+                'description': description[:5000],
+                'tags': tags[:50],
+                'categoryId': category_id
+            },
+            'status': {
+                'privacyStatus': privacy,
+                'selfDeclaredMadeForKids': made_for_kids
+            }
+        }
+
+        youtube.videos().update(
+            part='snippet,status',
+            body=body
+        ).execute()
+
+        # 2. Upload Thumbnail if provided
+        thumb_updated = False
+        if thumbnail_filename:
+            thumb_path = os.path.join(gemini_engine.THUMBNAILS_DIR, secure_filename(thumbnail_filename))
+            if os.path.exists(thumb_path):
+                try:
+                    youtube.thumbnails().set(
+                        videoId=video_id,
+                        media_body=MediaFileUpload(thumb_path)
+                    ).execute()
+                    thumb_updated = True
+                except Exception as te:
+                    print(f"Notice setting thumbnail: {te}")
+
+        return jsonify({
+            'success': True,
+            'video_id': video_id,
+            'video_url': f"https://youtu.be/{video_id}",
+            'privacy': privacy,
+            'thumbnail_updated': thumb_updated,
+            'message': f"Video successfully updated and published to YouTube as {privacy.upper()}!"
+        })
+    except Exception as e:
+        print(f"Error publishing video: {e}")
+        return jsonify({'error': str(e)}), 500
 
 # ==============================================
 # YOUTUBE CHUNKED UPLOAD PIPELINE
