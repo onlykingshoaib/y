@@ -5634,7 +5634,7 @@ def publish_optimized_video():
             if os.path.exists(thumb_path):
                 try:
                     from googleapiclient.http import MediaFileUpload
-                    media = MediaFileUpload(thumb_path, mimetype='image/jpeg', resumable=True)
+                    media = MediaFileUpload(thumb_path, mimetype='image/jpeg', resumable=False)
                     youtube.thumbnails().set(
                         videoId=video_id,
                         media_body=media
@@ -5642,6 +5642,8 @@ def publish_optimized_video():
                     thumb_updated = True
                 except Exception as te:
                     thumb_err = str(te)
+                    if "uploadForbidden" in thumb_err or "403" in thumb_err:
+                        thumb_err = "YouTube custom thumbnail upload requires phone verification at youtube.com/verify."
                     print(f"Notice setting thumbnail on YouTube: {te}")
 
         return jsonify({
@@ -5736,7 +5738,7 @@ def execute_youtube_upload(task_id, creds_dict, video_path, thumb_path, title, d
             try:
                 youtube.thumbnails().set(
                     videoId=video_id,
-                    media_body=MediaFileUpload(thumb_path)
+                    media_body=MediaFileUpload(thumb_path, mimetype='image/jpeg', resumable=False)
                 ).execute()
             except Exception as te:
                 print(f"Thumbnail upload notice (may require verified channel): {te}")

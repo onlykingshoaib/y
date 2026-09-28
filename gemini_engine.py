@@ -15,13 +15,12 @@ os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 
 # Dynamic Auto-Routing Multimodal Models (Targeting Google's dynamic default multimodal aliases)
 AUTO_ROUTING_MODELS = [
-    "gemini-3.5-flash-lite",
     "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-flash-latest"
 ]
-DEFAULT_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 def _normalize_model_name(model_name: str) -> str:
@@ -34,13 +33,13 @@ def _normalize_model_name(model_name: str) -> str:
 
     legacy_replacements = {
         "gemini-2.5-flash": "gemini-3.8-flash",
-        "gemini-2.5-pro": "gemini-3.7-flash",
-        "gemini-2.0-flash": "gemini-3.6-flash",
+        "gemini-2.5-pro": "gemini-3.8-flash",
+        "gemini-2.0-flash": "gemini-3.8-flash",
         "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
         "gemini-1.5-flash": "gemini-flash-latest",
         "gemini-1.5-pro": "gemini-3.8-flash",
         "gemini-1.0-pro": "gemini-3.8-flash",
-        "gemini-2.0-flash-exp": "gemini-3.6-flash",
+        "gemini-2.0-flash-exp": "gemini-3.8-flash",
     }
     return legacy_replacements.get(m, m)
 
@@ -95,7 +94,6 @@ def validate_and_save_gemini_key(api_key: str) -> Dict[str, Any]:
     try:
         from google import genai
         from google.genai import types
-        from google.genai import types
         client = genai.Client(api_key=clean_key, http_options=types.HttpOptions(timeout=20000))
         working_model = None
         last_err = None
@@ -107,6 +105,11 @@ def validate_and_save_gemini_key(api_key: str) -> Dict[str, Any]:
                     working_model = m
                     break
             except Exception as me:
+                err_str = str(me)
+                # If error is 429 (quota/rate limit) or 503 (high demand), the key is authentic and verified by Google
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
+                    working_model = m
+                    break
                 last_err = me
                 continue
 
@@ -450,18 +453,6 @@ def extract_video_thumbnails(
         cap.release()
         return (results, best_raw_info) if return_best_raw else results
 
-    frontal_cascade = None
-    profile_cascade = None
-    try:
-        f_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        p_path = cv2.data.haarcascades + "haarcascade_profileface.xml"
-        if os.path.exists(f_path):
-            frontal_cascade = cv2.CascadeClassifier(f_path)
-        if os.path.exists(p_path):
-            profile_cascade = cv2.CascadeClassifier(p_path)
-    except Exception as e:
-        print(f"Haar cascade load notice: {e}")
-
     num_samples = min(32, max(count * 5, 18))
     start_frame = int(total_frames * 0.04)
     end_frame = int(total_frames * 0.95)
@@ -485,7 +476,7 @@ def extract_video_thumbnails(
 
         sec = f_idx / fps if fps > 0 else 0.0
         score, face_count, best_face_box, gray = _score_frame_emotion_and_motion(
-            frame, prev_gray, frontal_cascade, profile_cascade
+            frame, prev_gray
         )
         prev_gray = gray
 
@@ -711,294 +702,6 @@ def _resolve_genre_dramatic_preset(
     return palettes[video_hash_int % len(palettes)]
 
 
-def _render_ultra_high_contrast_ai_visual(
-    base_bgr: np.ndarray,
-    aspect_ratio: str,
-    metadata: Dict[str, Any],
-    focus_box: Optional[Tuple[int, int, int, int]],
-    video_seed_str: str,
-    apply_typography: bool = True,
-    replace_mundane_backdrop: bool = True
-) -> np.ndarray:
-    """
-    4K POSTER-GRADE THUMBNAIL COMPOSITOR:
-    - Preserves 100% character facial identity in the foreground subject region with razor-sharp CLAHE eye/expression clarity.
-    - Replaces mundane backgrounds with genre-specific 4K atmospheric compositions:
-      * War/Heroic: Trench explosion horizon glow, volumetric battlefield smoke, glowing fiery embers/sparks.
-      * Horror/Thriller: High-contrast chiaroscuro shadows, eerie fog tendrils, crimson/cyan rim lighting.
-      * Comedy/Drama: Vibrant high-saturation studio pop, clean punchy radial backdrop, crisp rim light.
-    - Renders in matching aspect ratio: 9:16 (1080x1920) or 16:9 (1920x1080).
-    """
-    import cv2
-    from PIL import Image, ImageDraw, ImageFont
-
-    target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
-    seed_digest = int(hashlib.sha256(video_seed_str.encode("utf-8", errors="ignore")).hexdigest()[:12], 16)
-    rng = np.random.default_rng(seed_digest)
-
-    thumb_dir = metadata.get("thumbnail_directive") or {}
-    color_theme = str(thumb_dir.get("recommended_color_theme") or "")
-    genre_str = str(metadata.get("detected_genre") or metadata.get("detected_genre_emotion") or "")
-    primary_ctx = str(metadata.get("primary_context") or "")
-    climactic_ctx = str(metadata.get("climactic_context") or "")
-
-    preset = _resolve_genre_dramatic_preset(genre_str, primary_ctx, climactic_ctx, color_theme, seed_digest)
-    mode = preset["mode"]
-
-    # 1. Frame & dynamic subject-centered dramatic zoom
-    framed = fit_and_crop_to_aspect_ratio(base_bgr, aspect_ratio=aspect_ratio, focus_box=focus_box, high_res=True)
-    zoom_factor = 1.08 + ((seed_digest % 10) * 0.01)
-    zh, zw = int(round(target_h * zoom_factor)), int(round(target_w * zoom_factor))
-    zoomed = cv2.resize(framed, (zw, zh), interpolation=cv2.INTER_LANCZOS4)
-
-    x_off = max(0, min(zw - target_w, int((zw - target_w) * 0.5)))
-    y_off = max(0, min(zh - target_h, int((zh - target_h) * 0.35)))
-    canvas_bgr = zoomed[y_off:y_off + target_h, x_off:x_off + target_w].copy()
-
-    # Detect face in the zoomed canvas so we know the exact character face coordinates to preserve 100%
-    subject_cx = target_w * 0.5
-    subject_cy = target_h * (0.40 if aspect_ratio == "9:16" else 0.44)
-    subject_rx = target_w * (0.36 if aspect_ratio == "9:16" else 0.28)
-    subject_ry = target_h * (0.34 if aspect_ratio == "9:16" else 0.42)
-
-    try:
-        gray_c = cv2.cvtColor(canvas_bgr, cv2.COLOR_BGR2GRAY)
-        f_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        if os.path.exists(f_path):
-            fc = cv2.CascadeClassifier(f_path)
-            faces = fc.detectMultiScale(gray_c, scaleFactor=1.1, minNeighbors=4, minSize=(80, 80))
-            if len(faces) > 0:
-                # Pick largest face
-                fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
-                subject_cx = float(fx + fw * 0.5)
-                subject_cy = float(fy + fh * 0.55)
-                subject_rx = max(float(fw * 1.35), target_w * 0.24)
-                subject_ry = max(float(fh * 1.85), target_h * 0.28)
-    except Exception:
-        pass
-
-    # 2. Enhance Character Face & Expression Clarity (Multi-band CLAHE + Eye/Detail Sharpening)
-    lab = cv2.cvtColor(canvas_bgr, cv2.COLOR_BGR2LAB)
-    l_chan, a_chan, b_chan = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=3.4, tileGridSize=(8, 8))
-    l_enhanced = clahe.apply(l_chan)
-    l_float = l_enhanced.astype(np.float32) / 255.0
-    l_curve = np.clip(0.5 + 1.26 * (l_float - 0.5), 0.0, 1.0)
-    subject_bgr = cv2.cvtColor(cv2.merge([(l_curve * 255.0).astype(np.uint8), a_chan, b_chan]), cv2.COLOR_LAB2BGR)
-
-    hsv_sub = cv2.cvtColor(subject_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
-    sat_boost = 1.42 if mode == "comedy_drama" else (1.22 if mode == "horror_thriller" else 1.32)
-    hsv_sub[:, :, 1] = np.clip(hsv_sub[:, :, 1] * sat_boost, 0, 255)
-    subject_bgr = cv2.cvtColor(hsv_sub.astype(np.uint8), cv2.COLOR_HSV2BGR)
-
-    # 3. Build Soft Character Identity Preservation Mask vs Mundane Background Mask
-    yy, xx = np.mgrid[0:target_h, 0:target_w].astype(np.float32)
-    ellip_dist = np.sqrt(((xx - subject_cx) / subject_rx) ** 2 + ((yy - subject_cy) / subject_ry) ** 2)
-    # Also include lower torso region below the face so the character body connects naturally
-    torso_dist = np.sqrt(((xx - subject_cx) / (subject_rx * 1.45)) ** 2 + ((yy - (subject_cy + subject_ry * 0.95)) / (subject_ry * 1.15)) ** 2)
-    combined_dist = np.minimum(ellip_dist, torso_dist)
-
-    # Smooth feather: 1.0 inside character face/body, 0.0 in mundane background
-    subject_mask = np.clip(1.35 - combined_dist, 0.0, 1.0)
-    subject_mask = cv2.GaussianBlur(subject_mask, (0, 0), sigmaX=28.0)[:, :, np.newaxis]
-    rim_ring_mask = np.clip(np.exp(-((combined_dist - 0.92) ** 2) / 0.045) * 0.85, 0.0, 1.0)[:, :, np.newaxis]
-
-    # 4. Genre-Specific 4K Dramatic Backdrop Synthesis (Replaces mundane background while keeping character face 100%)
-    if replace_mundane_backdrop:
-        # Deep bokeh blur of periphery to obliterate mundane background clutter
-        bg_blurred = cv2.GaussianBlur(canvas_bgr, (0, 0), sigmaX=24.0).astype(np.float32)
-        shadow_bgr = np.array(preset["shadow_bgr"], dtype=np.float32).reshape((1, 1, 3))
-        highlight_bgr = np.array(preset["highlight_bgr"], dtype=np.float32).reshape((1, 1, 3))
-
-        if mode == "war_heroic":
-            # War/Heroic: Dark smoky trench sky at top + fiery orange-amber explosion glow at horizon + volumetric smoke
-            horizon_y = subject_cy + subject_ry * 0.25
-            expl_dist = np.sqrt(((xx - subject_cx) / (target_w * 0.55)) ** 2 + ((yy - horizon_y) / (target_h * 0.32)) ** 2)
-            explosion_glow = np.clip(np.exp(-(expl_dist ** 2) * 1.35), 0.0, 1.0)[:, :, np.newaxis]
-            smoke_wave = (np.sin(xx / 95.0 + yy / 140.0) * 0.5 + 0.5)[:, :, np.newaxis]
-            bg_dramatic = (
-                bg_blurred * 0.22
-                + shadow_bgr * 0.78
-                + highlight_bgr * explosion_glow * 0.95
-                + np.array([65, 75, 85], dtype=np.float32).reshape((1, 1, 3)) * smoke_wave * 0.32
-            )
-        elif mode == "horror_thriller":
-            # Horror/Thriller: Pitch-black chiaroscuro shadows + eerie crimson/cyan fog atmosphere
-            fog_band = np.clip(np.exp(-((yy - (target_h * 0.62)) / (target_h * 0.25)) ** 2), 0.0, 1.0)[:, :, np.newaxis]
-            eerie_mist = (np.cos(xx / 80.0 - yy / 110.0) * 0.5 + 0.5)[:, :, np.newaxis]
-            crimson_bgr = np.array([45, 15, 220], dtype=np.float32).reshape((1, 1, 3))
-            cyan_bgr = np.array([210, 180, 20], dtype=np.float32).reshape((1, 1, 3))
-            bg_dramatic = (
-                bg_blurred * 0.14
-                + shadow_bgr * 0.86
-                + crimson_bgr * fog_band * 0.48
-                + cyan_bgr * eerie_mist * 0.25
-            )
-        elif mode == "comedy_drama":
-            # Comedy/Drama: Clean, punchy vibrant radial energy backdrop
-            rad_dist = np.sqrt(((xx - subject_cx) / (target_w * 0.6)) ** 2 + ((yy - subject_cy) / (target_h * 0.6)) ** 2)
-            radial_burst = np.clip(1.15 - rad_dist * 0.75, 0.15, 1.0)[:, :, np.newaxis]
-            angles = np.arctan2(yy - subject_cy, xx - subject_cx)
-            sunburst_rays = (np.sin(angles * 16.0) * 0.5 + 0.5)[:, :, np.newaxis]
-            bg_dramatic = (
-                bg_blurred * 0.25
-                + shadow_bgr * 0.55
-                + highlight_bgr * radial_burst * (0.65 + 0.28 * sunburst_rays)
-            )
-        else:
-            # Mystery/Suspense: Cyber-noir teal & fiery amber spotlight backdrop
-            spot_dist = np.sqrt(((xx - subject_cx) / (target_w * 0.58)) ** 2 + ((yy - subject_cy) / (target_h * 0.58)) ** 2)
-            spot_glow = np.clip(1.0 - spot_dist * 0.72, 0.12, 1.0)[:, :, np.newaxis]
-            bg_dramatic = bg_blurred * 0.25 + shadow_bgr * 0.75 + highlight_bgr * (spot_glow ** 1.8) * 0.62
-
-        # Composite 100% preserved character face/subject over the 4K genre backdrop + intense rim lighting
-        fg_float = subject_bgr.astype(np.float32)
-        composited = (
-            fg_float * subject_mask
-            + bg_dramatic * (1.0 - subject_mask)
-            + highlight_bgr * rim_ring_mask * (1.0 - subject_mask * 0.45) * 0.55
-        )
-    else:
-        # Gentle cinematic vignette & rim polish for already AI-generated Nano Banana images
-        norm_dist = np.sqrt(((xx - subject_cx) / (target_w * 0.68)) ** 2 + ((yy - subject_cy) / (target_h * 0.68)) ** 2)
-        vig = np.clip(1.0 - 0.38 * (norm_dist ** 1.7), 0.45, 1.0)[:, :, np.newaxis]
-        composited = subject_bgr.astype(np.float32) * vig
-
-    # Unsharp mask for 4K poster-grade razor sharpness
-    blurred_comp = cv2.GaussianBlur(composited, (0, 0), sigmaX=2.0)
-    sharpened = np.clip(cv2.addWeighted(composited, 1.45, blurred_comp, -0.45, 0), 0, 255).astype(np.uint8)
-
-    # 5. Add Genre-Specific Atmospheric Particle FX (Embers/Sparks for War/Heroic, Eerie Motes for Horror)
-    rgb_img = cv2.cvtColor(sharpened, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb_img).convert("RGBA")
-    fx_layer = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
-    fx_draw = ImageDraw.Draw(fx_layer)
-
-    if mode == "war_heroic" and replace_mundane_backdrop:
-        # Draw glowing battlefield embers & sparks in the periphery around the soldier/character
-        for _ in range(55):
-            px = int(rng.integers(20, target_w - 20))
-            py = int(rng.integers(int(target_h * 0.08), int(target_h * 0.88)))
-            # Keep embers mostly outside the immediate center of the face
-            if abs(px - subject_cx) < subject_rx * 0.55 and abs(py - subject_cy) < subject_ry * 0.55:
-                continue
-            r_sz = int(rng.integers(2, 7))
-            ember_alpha = int(rng.integers(140, 245))
-            fx_draw.ellipse(
-                [px - r_sz, py - r_sz, px + r_sz, py + r_sz],
-                fill=(255, int(rng.integers(110, 215)), 20, ember_alpha)
-            )
-    elif mode == "horror_thriller" and replace_mundane_backdrop:
-        # Subtle eerie red/cyan atmospheric light motes in shadow corners
-        for _ in range(30):
-            px = int(rng.integers(20, target_w - 20))
-            py = int(rng.integers(20, target_h - 20))
-            if abs(px - subject_cx) < subject_rx * 0.65 and abs(py - subject_cy) < subject_ry * 0.65:
-                continue
-            r_sz = int(rng.integers(2, 6))
-            fx_draw.ellipse(
-                [px - r_sz, py - r_sz, px + r_sz, py + r_sz],
-                fill=(255, 35, 65, int(rng.integers(95, 185)))
-            )
-
-    pil_img = Image.alpha_composite(pil_img, fx_layer)
-
-    if not apply_typography:
-        final_rgb = np.array(pil_img.convert("RGB"))
-        return cv2.cvtColor(final_rgb, cv2.COLOR_RGB2BGR)
-
-    # 6. Poster-Grade Scrim & 4K Hook Typography at Bottom
-    scrim = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
-    scrim_draw = ImageDraw.Draw(scrim)
-    grad_start_y = int(target_h * (0.65 if aspect_ratio == "9:16" else 0.58))
-    for y in range(grad_start_y, target_h):
-        prog = (y - grad_start_y) / float(max(1, target_h - grad_start_y))
-        alpha = int(min(235, (prog ** 1.3) * 230))
-        scrim_draw.line([(0, y), (target_w, y)], fill=(5, 5, 10, alpha))
-    pil_img = Image.alpha_composite(pil_img, scrim)
-
-    draw = ImageDraw.Draw(pil_img)
-
-    raw_hook = str(thumb_dir.get("text_overlay") or "").strip()
-    if not raw_hook or raw_hook.upper() in ("WATCH THIS", "MUST WATCH", "-"):
-        v_title = str(metadata.get("viral_title") or metadata.get("primary_context") or "").strip()
-        clean_words = [w for w in re.sub(r'[#|!?:🔥🎯⚡]+', ' ', v_title).split() if len(w) > 1 and not w.lower().startswith("shorts")]
-        raw_hook = " ".join(clean_words[:4]).upper() if clean_words else "SHOCKING TWIST"
-    else:
-        raw_hook = " ".join(raw_hook.split()[:4]).upper()
-
-    font_size = 94 if aspect_ratio == "9:16" else 98
-    font = None
-    font_candidates = [
-        "C:/Windows/Fonts/impact.ttf",
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/calibrib.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    ]
-    for fp in font_candidates:
-        if os.path.exists(fp):
-            try:
-                font = ImageFont.truetype(fp, font_size)
-                break
-            except Exception:
-                pass
-    if font is None:
-        try:
-            font = ImageFont.load_default()
-        except Exception:
-            font = None
-
-    words = raw_hook.split()
-    if aspect_ratio == "9:16" and len(words) >= 3:
-        mid = (len(words) + 1) // 2
-        lines = [" ".join(words[:mid]), " ".join(words[mid:])]
-    elif len(raw_hook) > 15 and len(words) >= 2:
-        mid = (len(words) + 1) // 2
-        lines = [" ".join(words[:mid]), " ".join(words[mid:])]
-    else:
-        lines = [raw_hook]
-
-    line_height = int(font_size * 1.16)
-    total_text_h = line_height * len(lines)
-    base_y = target_h - total_text_h - (125 if aspect_ratio == "9:16" else 68)
-
-    bar_w = int(target_w * 0.30)
-    bar_x = (target_w - bar_w) // 2
-    bar_y = max(24, base_y - 26)
-    draw.rounded_rectangle(
-        [bar_x, bar_y, bar_x + bar_w, bar_y + 9],
-        radius=4,
-        fill=(*preset["glow_rgb"], 250)
-    )
-
-    for idx, line_str in enumerate(lines):
-        ly = base_y + idx * line_height
-        try:
-            bbox = draw.textbbox((0, 0), line_str, font=font)
-            tw = bbox[2] - bbox[0]
-        except Exception:
-            tw = len(line_str) * (font_size // 2)
-        lx = max(28, (target_w - tw) // 2)
-
-        for dx in (-6, -3, 0, 3, 6):
-            for dy in (-6, -3, 0, 3, 6):
-                if dx != 0 or dy != 0:
-                    draw.text((lx + dx, ly + dy), line_str, font=font, fill=(0, 0, 0, 250))
-        draw.text((lx + 6, ly + 8), line_str, font=font, fill=(0, 0, 0, 230))
-        line_color = (255, 255, 255, 255) if idx == 0 else (*preset["text_rgb"], 255)
-        draw.text((lx, ly), line_str, font=font, fill=line_color)
-
-    draw.rectangle(
-        [3, 3, target_w - 4, target_h - 4],
-        outline=(*preset["glow_rgb"], 210),
-        width=6
-    )
-
-    final_rgb = np.array(pil_img.convert("RGB"))
-    return cv2.cvtColor(final_rgb, cv2.COLOR_RGB2BGR)
-
-
 def generate_dynamic_ai_thumbnail(
     video_path: str,
     format_type: str,
@@ -1010,76 +713,148 @@ def generate_dynamic_ai_thumbnail(
     channel_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    HYPER-ENGAGING 4K NANO BANANA THUMBNAIL PIPELINE (SLOT 1 DEFAULT SELECTED):
-    1. Extracts the highest-emotion character face directly from the native video frames.
-    2. Feeds this facial reference (`face_crop_pil` + `full_ref_pil`) along with the detected video genre
-       into the Nano Banana / Imagen API (`gemini-3.1-flash-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image`).
-    3. Applies genre-specific dramatic rendering:
-       - War/Heroic: Soldier kid/hero holding heavy gear, trench explosions, cinematic smoke, ultra-dramatic lighting.
-       - Horror/Thriller: High-contrast shadows, shock expressions, eerie background atmosphere.
-       - Comedy/Drama: Exaggerated expressions, vibrant colors, clean punchy backdrop.
-    4. Preserves 100% character facial identity while replacing mundane bodies/backgrounds with
-       ultra-clickable, 4K poster-grade compositions in matching aspect ratio (9:16 or 16:9).
+    SLOT 1 DEFAULT: 4K NANO BANANA MOVIE POSTER AI IMAGE GENERATOR:
+    - Pure AI synthesis using gemini-3.1-flash-image with response_modalities=["IMAGE"].
+    - Fallbacks: gemini-2.5-flash-image, imagen-3.0-generate-002, imagen-4.0-generate-001.
+    - Completely eliminates OpenCV frame-border-text compositing hacks.
+    - Synthesizes 4K cinematic movie poster matching format (9:16 vertical or 16:9 widescreen).
     """
+    import io
     import cv2
     from PIL import Image
 
     target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
-    primary_ctx = str(metadata.get("primary_context") or "Dramatic Video Moment")
-    climactic_ctx = str(metadata.get("climactic_context") or metadata.get("plot_twists") or metadata.get("summary_insights") or primary_ctx)
-    facial_expr = str(metadata.get("facial_expression_analysis") or "Intense, expressive close-up emotion with dramatic eye contact")
-    genre_str = str(metadata.get("detected_genre") or metadata.get("detected_genre_emotion") or "High-Suspense Cinematic")
-    viral_title = str(metadata.get("viral_title") or primary_ctx)
-    thumb_dir = metadata.get("thumbnail_directive") or {}
-    text_overlay = str(thumb_dir.get("text_overlay") or "MUST WATCH").strip()
-    scene_dir = str(thumb_dir.get("visual_scene_direction") or "Close-up dramatic subject with chiaroscuro rim lighting")
-    color_theme = str(thumb_dir.get("recommended_color_theme") or "Ultra-high-contrast cinematic teal and fiery amber")
+    target_ratio = "9:16" if aspect_ratio == "9:16" else "16:9"
 
-    video_seed_str = f"{os.path.basename(video_path)}|{viral_title}|{primary_ctx}|{climactic_ctx}|{scene_dir}|{color_theme}|{time.time()}"
+    primary_ctx = str(metadata.get("primary_context") or "Cinematic Story Breakdown")
+    climactic_ctx = str(
+        metadata.get("climactic_context") or 
+        metadata.get("plot_twists") or 
+        metadata.get("summary_insights") or 
+        metadata.get("summary") or 
+        primary_ctx
+    )
+    genre_str = str(metadata.get("detected_genre") or metadata.get("detected_genre_emotion") or "Action/Thriller")
+    viral_title = str(metadata.get("viral_title") or metadata.get("title") or primary_ctx)
+    thumb_dir = metadata.get("thumbnail_directive") or {}
+    text_overlay = str(thumb_dir.get("text_overlay") or "MUST WATCH").strip().upper()
+    scene_dir = str(thumb_dir.get("visual_scene_direction") or "High-contrast cinematic movie poster composition with intense character emotion")
+    color_theme = str(thumb_dir.get("recommended_color_theme") or "Cinematic lighting, high dynamic range, chiaroscuro shadows")
+
+    video_seed_str = f"{os.path.basename(video_path or '')}|{viral_title}|{primary_ctx}|{climactic_ctx}|{scene_dir}"
     seed_digest = int(hashlib.sha256(video_seed_str.encode("utf-8", errors="ignore")).hexdigest()[:12], 16)
     preset = _resolve_genre_dramatic_preset(genre_str, primary_ctx, climactic_ctx, color_theme, seed_digest)
     genre_category = preset["genre_category"]
     genre_prompt_style = preset["prompt_style"]
 
     orientation_desc = (
-        "vertical 9:16 portrait YouTube Shorts / Reels 4K poster thumbnail (1080x1920)"
+        "vertical 9:16 portrait YouTube Shorts / Reels 4K movie poster"
         if aspect_ratio == "9:16"
-        else "cinematic 16:9 widescreen YouTube Long-form 4K poster thumbnail (1920x1080)"
+        else "cinematic 16:9 widescreen YouTube 4K movie poster"
     )
 
-    nano_banana_prompt = (
-        f"Create an ultra-clickable, 4K poster-grade {orientation_desc} using the provided character facial reference.\n"
-        f"- CRITICAL IDENTITY RULE: Preserve 100% of the exact facial identity, face structure, age, and likeness of the person in the reference image.\n"
-        f"- DETECTED GENRE & DRAMATIC RENDERING ({genre_category}): {genre_prompt_style}\n"
-        f"- Specific Video Plot & Climax: {primary_ctx} — {climactic_ctx}\n"
-        f"- Facial Expression Enhancement: Amplify the character's expression ({facial_expr}) so it is hyper-expressive and immediately draws clicks. {scene_dir}\n"
-        f"- Replace Mundane Body/Background: Replace any mundane clothing or plain room/street background with a 4K cinematic {genre_category} environment and lighting ({color_theme}).\n"
-        f"- Bold Hook Text Overlay (3-4 words max): \"{text_overlay}\"\n"
-        f"Strictly {aspect_ratio} aspect ratio, photorealistic 4K poster composition, extreme dynamic range, razor-sharp eyes."
+    ai_poster_prompt = (
+        f"Synthesize an authentic, high-contrast 4K cinematic movie poster ({orientation_desc}) in {aspect_ratio} aspect ratio.\n"
+        f"- Video Narrative & Climax: {primary_ctx} — {climactic_ctx}\n"
+        f"- Detected Genre: {genre_category}\n"
+        f"- Artistic Style & Lighting: {genre_prompt_style}. {scene_dir}\n"
+        f"- Color Grading: {color_theme}, volumetric rim lighting, deep shadows, crisp highlights.\n"
+        f"- Character Emotion: Intense, high-stakes facial expression with direct dramatic eye contact.\n"
+        f"- Hook Typography: Prominently feature bold 3D movie-title text: \"{text_overlay}\"\n"
+        f"Strictly {aspect_ratio} aspect ratio, photorealistic 4K poster grade, extreme dynamic range."
     )
 
-    # High-Impact 4K Poster-Grade Genre-Atmospheric Compositor
-    # Preserves 100% character face / action subject + replaces mundane backdrop with 4K cinematic lighting
-    base_frame = reference_frame_bgr
-    if base_frame is None or base_frame.size == 0:
-        base_frame = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    # Convert native video frame to PIL Image reference for image-to-image synthesis
+    ref_pil = None
+    if reference_frame_bgr is not None and reference_frame_bgr.size > 0:
+        try:
+            ref_rgb = cv2.cvtColor(reference_frame_bgr, cv2.COLOR_BGR2RGB)
+            ref_pil = Image.fromarray(ref_rgb)
+        except Exception:
+            ref_pil = None
 
-    generated_bgr = _render_ultra_high_contrast_ai_visual(
-        base_frame,
-        aspect_ratio=aspect_ratio,
-        metadata=metadata,
-        focus_box=reference_face_box,
-        video_seed_str=video_seed_str,
-        apply_typography=True,
-        replace_mundane_backdrop=True
-    )
-    generation_engine = f"nano-banana-4k-{preset['mode']}"
+    client = None
+    try:
+        client = get_genai_client()
+    except Exception as ce:
+        print(f"[Gemini Client Notice] {ce}")
+
+    image_bytes = None
+    generation_engine = "gemini-3.1-flash-image"
+
+    if client:
+        # Step 1: gemini-3.1-flash-image / gemini-2.5-flash-image with response_modalities=["IMAGE"]
+        contents_input = []
+        if ref_pil is not None:
+            contents_input.append(ref_pil)
+        contents_input.append(ai_poster_prompt)
+
+        for img_model in ["gemini-3.1-flash-image", "gemini-2.5-flash-image"]:
+            try:
+                from google.genai import types
+                resp = client.models.generate_content(
+                    model=img_model,
+                    contents=contents_input,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["IMAGE"],
+                        image_config=types.ImageConfig(aspect_ratio=target_ratio)
+                    )
+                )
+                if resp and resp.parts:
+                    for part in resp.parts:
+                        if part.inline_data and part.inline_data.data:
+                            image_bytes = part.inline_data.data
+                            generation_engine = f"{img_model} (4K AI Poster)"
+                            break
+                if image_bytes:
+                    break
+            except Exception as me:
+                print(f"[{img_model} Image Gen Notice] {me}")
+
+        # Step 2: Fallback to Imagen (imagen-3.0-generate-002, imagen-4.0-generate-001)
+        if not image_bytes:
+            for imagen_model in ["imagen-3.0-generate-002", "imagen-4.0-generate-001"]:
+                try:
+                    from google.genai import types
+                    resp = client.models.generate_images(
+                        model=imagen_model,
+                        prompt=ai_poster_prompt,
+                        config=types.GenerateImagesConfig(
+                            number_of_images=1,
+                            aspect_ratio=target_ratio,
+                            output_mime_type="image/jpeg"
+                        )
+                    )
+                    if resp and resp.generated_images:
+                        image_bytes = resp.generated_images[0].image.image_bytes
+                        generation_engine = f"{imagen_model} (Imagen 4K Poster)"
+                        break
+                except Exception as ie:
+                    print(f"[{imagen_model} Imagen Notice] {ie}")
 
     uid = uuid.uuid4().hex[:8]
     ratio_slug = "9x16" if aspect_ratio == "9:16" else "16x9"
     ai_filename = f"thumb_slot1_4k_{ratio_slug}_{uid}.jpg"
     ai_filepath = os.path.join(THUMBNAILS_DIR, ai_filename)
-    cv2.imwrite(ai_filepath, generated_bgr, [cv2.IMWRITE_JPEG_QUALITY, 97])
+
+    if image_bytes:
+        pil_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        if pil_img.size != (target_w, target_h):
+            pil_img = pil_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        pil_img.save(ai_filepath, format="JPEG", quality=96, optimize=True)
+    else:
+        # Clean fallback: high-res aspect crop of native frame without any fake borders or drawing hacks
+        base_frame = reference_frame_bgr
+        if base_frame is None or base_frame.size == 0:
+            base_frame = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        clean_frame = fit_and_crop_to_aspect_ratio(
+            base_frame,
+            aspect_ratio=aspect_ratio,
+            focus_box=reference_face_box,
+            high_res=True
+        )
+        cv2.imwrite(ai_filepath, clean_frame, [cv2.IMWRITE_JPEG_QUALITY, 96])
+        generation_engine = "native-frame-clean"
 
     return {
         "id": "slot_1_ai",
@@ -1089,9 +864,9 @@ def generate_dynamic_ai_thumbnail(
         "filepath": ai_filepath,
         "seconds": 0.0,
         "timestamp": f"SLOT 1 • 4K NANO BANANA ({aspect_ratio})",
-        "label": f"🍌 Slot 1: 4K Nano Banana ({genre_category} • {aspect_ratio})",
+        "label": f"🍌 Slot 1: 4K Nano Banana Poster ({aspect_ratio})",
         "has_face": True,
-        "is_ai_generated": True,
+        "is_ai_generated": bool(image_bytes is not None),
         "is_recommended": True,
         "selected": True,
         "aspect_ratio": aspect_ratio,
@@ -1826,7 +1601,7 @@ def analyze_youtube_video_with_gemini(
         privacy_status = existing_video_meta.get("privacy", "PRIVATE")
         category_id = existing_video_meta.get("category_id", "24")
 
-    if not yt_title and youtube_service:
+    if youtube_service:
         try:
             v_res = youtube_service.videos().list(id=video_id, part="snippet,contentDetails,status").execute()
             items = v_res.get("items", [])
@@ -1834,12 +1609,34 @@ def analyze_youtube_video_with_gemini(
                 snip = items[0].get("snippet", {})
                 cd = items[0].get("contentDetails", {})
                 st = items[0].get("status", {})
-                yt_title = snip.get("title", "")
-                yt_desc = snip.get("description", "")
-                yt_tags = snip.get("tags", [])
-                category_id = snip.get("categoryId", "24")
-                dur_seconds = parse_iso8601_duration(cd.get("duration", ""))
-                privacy_status = st.get("privacyStatus", "PRIVATE").upper()
+                if not yt_title:
+                    yt_title = snip.get("title", "")
+                    yt_desc = snip.get("description", "")
+                    yt_tags = snip.get("tags", [])
+                    category_id = snip.get("categoryId", "24")
+                    dur_seconds = parse_iso8601_duration(cd.get("duration", ""))
+                current_privacy = st.get("privacyStatus", "PRIVATE").upper()
+                privacy_status = current_privacy
+
+                # ZERO-BANDWIDTH UNLISTED BRIDGE:
+                # If video is PRIVATE, Google cloud crawler cannot ingest it directly.
+                # Switch to UNLISTED (~200ms) so Gemini can ingest native frames & audio without local downloads.
+                if current_privacy == "PRIVATE":
+                    print(f"[Unlisted Bridge] Bridging private video {video_id} to UNLISTED for native Gemini vision ingestion...")
+                    try:
+                        youtube_service.videos().update(
+                            part="status",
+                            body={
+                                "id": video_id,
+                                "status": {
+                                    "privacyStatus": "unlisted"
+                                }
+                            }
+                        ).execute()
+                        privacy_status = "UNLISTED"
+                        print(f"[Unlisted Bridge] Successfully switched {video_id} to UNLISTED.")
+                    except Exception as ue:
+                        print(f"[Unlisted Bridge Notice] Could not update to unlisted: {ue}")
         except Exception as ye:
             print(f"[YouTube Video Analyzer] Notice fetching YouTube API details: {ye}")
 
@@ -1871,34 +1668,10 @@ def analyze_youtube_video_with_gemini(
     pref_thumb = (existing_video_meta.get("thumbnail") or "") if existing_video_meta else ""
     raw_frame_bgr, local_thumb_path = download_youtube_thumbnail_frame(video_id, preferred_url=pref_thumb)
 
-    # Detect character faces & extract #1 highest-emotion character face crop
-    frontal_cascade = None
-    profile_cascade = None
-    try:
-        cascade_dir = getattr(cv2, 'data', None)
-        cpath = getattr(cascade_dir, 'haarcascades', '') if cascade_dir else ''
-        if cpath and os.path.exists(cpath):
-            fpath = os.path.join(cpath, 'haarcascade_frontalface_default.xml')
-            if os.path.exists(fpath):
-                frontal_cascade = cv2.CascadeClassifier(fpath)
-            ppath = os.path.join(cpath, 'haarcascade_profileface.xml')
-            if os.path.exists(ppath):
-                profile_cascade = cv2.CascadeClassifier(ppath)
-    except Exception:
-        pass
-
     face_box = None
     face_crop_bgr = None
     ref_pil = None
     if raw_frame_bgr is not None and raw_frame_bgr.size > 0:
-        _, face_count, best_box, _ = _score_frame_emotion_and_motion(
-            raw_frame_bgr,
-            prev_gray=None,
-            frontal_cascade=frontal_cascade,
-            profile_cascade=profile_cascade
-        )
-        face_box = best_box
-        face_crop_bgr = extract_character_face_reference_crop(raw_frame_bgr, face_box)
         try:
             ref_rgb = cv2.cvtColor(raw_frame_bgr, cv2.COLOR_BGR2RGB)
             ref_pil = Image.fromarray(ref_rgb)
@@ -2024,34 +1797,35 @@ Return STRICT JSON ONLY with these EXACT keys:
         last_error = ge
 
     if client:
-        # Step A: Primary Direct Google Video Understanding via Interactions API
-        try:
-            interaction = client.interactions.create(
-                model="gemini-3.8-flash",
-                input=[
-                    {"type": "text", "text": prompt_str},
-                    {"type": "video", "uri": f"https://www.youtube.com/watch?v={video_id}"}
-                ]
-            )
-            raw_text = getattr(interaction, "output_text", "") or ""
-            clean_json = re.sub(r"^```json\s*", "", raw_text, flags=re.MULTILINE)
-            clean_json = re.sub(r"^```\s*", "", clean_json, flags=re.MULTILINE)
-            clean_json = re.sub(r"```$", "", clean_json.strip())
-            try:
-                parsed = json.loads(clean_json)
-            except Exception:
-                rep_resp = client.models.generate_content(
-                    model="gemini-3.5-flash-lite",
-                    contents=[f"Format this response into strict valid JSON only:\n{raw_text[:2500]}"],
-                    config={"response_mime_type": "application/json"}
-                )
-                parsed = json.loads(rep_resp.text.strip())
+        from google.genai import types
 
-            if isinstance(parsed, dict) and (parsed.get("title") or parsed.get("viral_title") or parsed.get("summary")):
-                metadata = parsed
-                metadata["model_used"] = "gemini-3.8-flash (Direct YouTube Video Understanding)"
-        except Exception as ie:
-            print(f"[Interactions API Notice] {ie}. Falling back to multimodal vision+transcript auto-routing.")
+        # Step A: Native YouTube Vision Ingestion via google-genai FileData(file_uri=youtube_url)
+        youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+        yt_part = types.Part(
+            file_data=types.FileData(file_uri=youtube_url),
+            video_metadata=types.VideoMetadata(fps=0.5)
+        )
+        for model_name in ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[yt_part, prompt_str],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
+                )
+                if response and response.text:
+                    raw_text = response.text
+                    clean_json = re.sub(r"^```json\s*", "", raw_text, flags=re.MULTILINE)
+                    clean_json = re.sub(r"^```\s*", "", clean_json, flags=re.MULTILINE)
+                    clean_json = re.sub(r"```$", "", clean_json.strip())
+                    parsed = json.loads(clean_json)
+                    if isinstance(parsed, dict) and (parsed.get("title") or parsed.get("viral_title") or parsed.get("summary")):
+                        metadata = parsed
+                        metadata["model_used"] = f"{model_name} (Native YouTube Vision Ingestion)"
+                        break
+            except Exception as nve:
+                print(f"[Native YouTube Vision Ingestion Notice - {model_name}] {nve}")
 
         # Step B: Multimodal Vision + Transcript Fallback
         if not metadata:
@@ -2065,7 +1839,9 @@ Return STRICT JSON ONLY with these EXACT keys:
                     response = client.models.generate_content(
                         model=m,
                         contents=contents_payload,
-                        config={"response_mime_type": "application/json"}
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json"
+                        )
                     )
                     text = response.text or ""
                     clean_json = re.sub(r"^```json\s*", "", text, flags=re.MULTILINE)
@@ -2077,13 +1853,13 @@ Return STRICT JSON ONLY with these EXACT keys:
                         rep_resp = client.models.generate_content(
                             model="gemini-3.5-flash-lite",
                             contents=[f"Format this response into strict valid JSON only:\n{text[:2500]}"],
-                            config={"response_mime_type": "application/json"}
+                            config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
                         parsed = json.loads(rep_resp.text.strip())
 
                     if isinstance(parsed, dict) and (parsed.get("title") or parsed.get("viral_title") or parsed.get("detected_genre")):
                         metadata = parsed
-                        metadata["model_used"] = m
+                        metadata["model_used"] = f"{m} (Multimodal Transcript+Frame Fallback)"
                         break
                 except Exception as ce:
                     last_error = ce
