@@ -2170,7 +2170,10 @@ HTML_MAIN = """
                             <div style="font-size: 14.5px; font-weight: 800; color: #f3e8ff; display: flex; align-items: center; gap: 8px;">
                                 <span>🚀</span> 1-Click Fast Workflow: Upload Private to YouTube &amp; Optimize Here
                             </div>
-                            <span style="font-size: 11px; background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700;">Zero Server Upload Bandwidth</span>
+                            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                <span id="pipelineStatusBadge" style="font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); color: #cbd5e1; display: inline-flex; align-items: center; gap: 5px; transition: all 0.3s;">⚪ Ready to analyze</span>
+                                <span style="font-size: 11px; background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700;">Zero Server Upload Bandwidth</span>
+                            </div>
                         </div>
                         <div style="font-size: 12.5px; color: #d8b4fe; line-height: 1.5; margin-bottom: 14px;">
                             Upload your Short or Long video directly to YouTube (Web or Mobile App) as <strong>"Private"</strong> or <strong>"Unlisted"</strong>. YouTube pre-processes 100% accurate Hindi/English auto-subtitles and duration. Paste URL or select below to generate a <strong>4K Nano Banana Movie Poster Thumbnail</strong> and publish Public in seconds!
@@ -2352,6 +2355,10 @@ HTML_MAIN = """
                                     <div style="font-size: 11px; color: #ec4899; font-weight: 700; text-transform: uppercase;">Recommended Color Theme</div>
                                     <div id="aiThumbColorTheme" style="font-size: 12px; color: #e2e8f0; margin-top: 4px; line-height: 1.4;">-</div>
                                 </div>
+                                <div style="background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 3px solid #10b981; grid-column: 1 / -1;">
+                                    <div style="font-size: 11px; color: #10b981; font-weight: 700; text-transform: uppercase;">Cinematic Thumbnail Concept</div>
+                                    <div id="aiThumbConceptDisplay" style="font-size: 12.5px; color: #e2e8f0; margin-top: 4px; line-height: 1.45;">-</div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -2363,6 +2370,17 @@ HTML_MAIN = """
                             <span style="font-size: 11px; color: var(--text-muted);">Formatted for YouTube algorithm</span>
                         </div>
                         <textarea id="aiGeneratedDesc" style="height: 160px; font-size: 13px;"></textarea>
+                    </div>
+
+                    <!-- Timestamps / Chapters -->
+                    <div class="result-group">
+                        <div class="result-group-title">
+                            <span>⏱️ Video Chapter Timestamps</span>
+                            <span id="aiTimestampCount" style="font-size: 11px; color: var(--text-muted);">Auto-detected sections</span>
+                        </div>
+                        <div id="aiTimestampsDisplay" style="background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 8px; padding: 12px 14px; font-size: 13px; line-height: 1.6; color: #e2e8f0;">
+                            No chapter timestamps needed
+                        </div>
                     </div>
 
                     <!-- Niche Targeted Hashtags -->
@@ -2403,19 +2421,70 @@ HTML_MAIN = """
                         <div id="aiSummaryInsights" style="font-size: 13px; color: #e9d5ff; line-height: 1.5;"></div>
                     </div>
 
-                    <!-- Dual Actions -->
-                    <div class="ai-actions-row">
-                        <button class="btn-populate" id="btnPopulateToManual">
-                            <span>📝 Auto-Populate Studio Form</span>
+                    <!-- Actions Row -->
+                    <div class="ai-actions-row" style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px;">
+                        <button type="button" class="btn-populate" id="btnPopulateToManual" style="flex: 1; min-width: 170px;">
+                            <span>📝 Edit in Manual Studio</span>
                         </button>
-                        <button class="btn-auto-publish" id="btnOneClickPublish">
-                            <svg style="width: 20px; height: 20px; fill: white;" viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
-                            <span>One-Click Auto-Publish to YouTube</span>
+                        <button type="button" class="btn-populate" id="btnApplyMetadata" style="flex: 1.2; min-width: 210px; background: rgba(56, 189, 248, 0.14); border: 1px solid #38bdf8; color: #38bdf8;">
+                            <span>💾 Apply Changes to YouTube</span>
+                        </button>
+                        <button type="button" class="btn-auto-publish" id="btnPublishPublic" style="flex: 1.4; min-width: 210px; background: linear-gradient(135deg, #ef4444, #ec4899); border: none;">
+                            <svg style="width: 18px; height: 18px; fill: white;" viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
+                            <span>🚀 Publish Public</span>
                         </button>
                     </div>
 
                 </div>
 
+            </div>
+
+            <!-- Publish Public Confirmation Modal -->
+            <div id="publishConfirmModal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.82); backdrop-filter: blur(8px); z-index: 10000; align-items: center; justify-content: center; padding: 16px;">
+                <div style="background: #171228; border: 1px solid rgba(236, 72, 153, 0.5); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 30px rgba(236, 72, 153, 0.25); border-radius: 16px; max-width: 520px; width: 100%; padding: 24px; color: white;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 12px;">
+                        <div style="font-size: 17px; font-weight: 800; display: flex; align-items: center; gap: 8px; color: #f43f5e;">
+                            <span>🚀</span> Confirm Public YouTube Release
+                        </div>
+                        <button type="button" onclick="closePublishConfirmModal()" style="background: transparent; border: none; color: #94a3b8; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
+                    </div>
+
+                    <p style="font-size: 13px; color: #cbd5e1; margin-bottom: 16px; line-height: 1.5;">
+                        You are about to make this video <strong>PUBLIC</strong> on YouTube. Anyone will be able to search, watch, and share it.
+                    </p>
+
+                    <div style="background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 14px; margin-bottom: 18px; display: flex; flex-direction: column; gap: 10px; font-size: 13px;">
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #94a3b8;">Video ID:</span>
+                            <span id="modalVideoId" style="font-family: monospace; font-weight: 700; color: #38bdf8;">-</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #94a3b8;">Visibility Change:</span>
+                            <span id="modalVisibilityChange" style="font-weight: 800; color: #4ade80;">PRIVATE ➔ PUBLIC</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #94a3b8;">Category:</span>
+                            <span id="modalCategory" style="font-weight: 700; color: #e2e8f0;">-</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #94a3b8;">Thumbnail:</span>
+                            <span id="modalThumbnailStatus" style="font-weight: 700; color: #ffba08;">Slot 1 Attached</span>
+                        </div>
+                        <div style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 8px;">
+                            <span style="color: #94a3b8; display: block; font-size: 11px; text-transform: uppercase;">Final Title:</span>
+                            <span id="modalFinalTitle" style="font-weight: 700; color: #f8fafc; font-size: 13px; display: block; margin-top: 2px;">-</span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; justify-content: flex-end;">
+                        <button type="button" onclick="closePublishConfirmModal()" style="padding: 10px 18px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.2); background: transparent; color: #cbd5e1; font-weight: 700; cursor: pointer;">
+                            Cancel
+                        </button>
+                        <button type="button" id="btnConfirmGoPublic" style="padding: 10px 22px; border-radius: 8px; border: none; background: linear-gradient(135deg, #ef4444, #ec4899); color: white; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);">
+                            <span>✔ Confirm &amp; Go Public</span>
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <!-- ============================================== -->
@@ -3216,6 +3285,26 @@ HTML_MAIN = """
             window._selectedChannelVideoMeta = (window._cachedChannelVideos && window._cachedChannelVideos[videoId]) || null;
         };
 
+        // Pipeline Status Management
+        function updatePipelineStatus(state, msg) {
+            const badge = document.getElementById('pipelineStatusBadge');
+            if (!badge) return;
+            const states = {
+                'ready': { text: '⚪ Ready to analyze', bg: 'rgba(255,255,255,0.08)', border: 'rgba(255,255,255,0.2)', color: '#cbd5e1' },
+                'analyzing': { text: '🔄 Analyzing...', bg: 'rgba(168,85,247,0.2)', border: 'rgba(168,85,247,0.5)', color: '#d8b4fe' },
+                'complete': { text: '✅ Analysis complete', bg: 'rgba(16,185,129,0.2)', border: 'rgba(16,185,129,0.5)', color: '#4ade80' },
+                'ready_to_apply': { text: '📝 Ready to apply', bg: 'rgba(56,189,248,0.2)', border: 'rgba(56,189,248,0.5)', color: '#38bdf8' },
+                'applied': { text: '✔ Applied to YouTube', bg: 'rgba(16,185,129,0.25)', border: 'rgba(16,185,129,0.6)', color: '#34d399' },
+                'published': { text: '🚀 Published (Public)', bg: 'rgba(236,72,153,0.25)', border: 'rgba(236,72,153,0.6)', color: '#f43f5e' },
+                'error': { text: msg ? `❌ Error: ${msg.substring(0, 32)}` : '❌ Error', bg: 'rgba(239,68,68,0.25)', border: 'rgba(239,68,68,0.6)', color: '#f87171' }
+            };
+            const s = states[state] || states['ready'];
+            badge.textContent = s.text;
+            badge.style.background = s.bg;
+            badge.style.borderColor = s.border;
+            badge.style.color = s.color;
+        }
+
         // Run YouTube Video Optimization
         const btnRunYtOptimization = document.getElementById('btnRunYtOptimization');
         if (btnRunYtOptimization) {
@@ -3233,12 +3322,14 @@ HTML_MAIN = """
                 if (stepsCont) stepsCont.style.display = 'block';
                 if (resultsBox) resultsBox.style.display = 'none';
 
+                updatePipelineStatus('analyzing');
+
                 // Update step titles for YouTube optimization
                 const s1 = document.getElementById('step1'); if (s1) { const span = s1.querySelector('span:last-child'); if (span) span.textContent = "Fetching 100% Accurate Spoken Dialogue Subtitles from YouTube"; }
                 const s2 = document.getElementById('step2'); if (s2) { const span = s2.querySelector('span:last-child'); if (span) span.textContent = "Downloading High-Res Reference Frame & Detecting Character Faces"; }
-                const s3 = document.getElementById('step3'); if (s3) { const span = s3.querySelector('span:last-child'); if (span) span.textContent = "Analyzing Ground-Truth Plot, Character Dynamic & Climactic Context via Gemini 2.5"; }
+                const s3 = document.getElementById('step3'); if (s3) { const span = s3.querySelector('span:last-child'); if (span) span.textContent = "Analyzing Video Understanding via Google Gemini Interactions"; }
                 const s4 = document.getElementById('step4'); if (s4) { const span = s4.querySelector('span:last-child'); if (span) span.textContent = "Generating 4K Nano Banana Movie Poster Thumbnail (Slot 1 Default)"; }
-                const s5 = document.getElementById('step5'); if (s5) { const span = s5.querySelector('span:last-child'); if (span) span.textContent = "Auto-Selecting 4K Movie Poster & Preparing 1-Click 'Apply & Go PUBLIC'"; }
+                const s5 = document.getElementById('step5'); if (s5) { const span = s5.querySelector('span:last-child'); if (span) span.textContent = "Finalizing Metadata, Timestamps & Preparing 1-Click Publish"; }
 
                 setStepActive('step1');
                 setTimeout(() => { setStepCompleted('step1'); setStepActive('step2'); }, 1200);
@@ -3253,7 +3344,8 @@ HTML_MAIN = """
                             video_id: urlOrId,
                             format_type: currentSelectedFormat,
                             instructions: document.getElementById('aiCustomPrompt') ? document.getElementById('aiCustomPrompt').value : '',
-                            existing_meta: window._selectedChannelVideoMeta || null
+                            existing_meta: window._selectedChannelVideoMeta || null,
+                            force_refresh: false
                         })
                     });
 
@@ -3267,9 +3359,12 @@ HTML_MAIN = """
                         setStepCompleted('step5');
                         renderGeminiResults(metadata);
                         btnRunYtOptimization.disabled = false;
+                        updatePipelineStatus('complete');
+                        setTimeout(() => updatePipelineStatus('ready_to_apply'), 800);
                     }, 500);
 
                 } catch (err) {
+                    updatePipelineStatus('error', err.message);
                     alert("YouTube Optimization Notice: " + err.message);
                     btnRunYtOptimization.disabled = false;
                     if (stepsCont) stepsCont.style.display = 'none';
@@ -3501,8 +3596,33 @@ HTML_MAIN = """
             document.getElementById('aiKidsBadge').textContent = data.made_for_kids ? 'Audience: Made for Kids' : 'Audience: General (Not for kids)';
             document.getElementById('madeForKids').checked = Boolean(data.made_for_kids);
 
-            // 7. Strategic Insights
-            document.getElementById('aiSummaryInsights').textContent = data.summary_insights || 'Individual video evaluation completed via Gemini 2.5 Flash.';
+            // 7. Thumbnail Concept Display
+            const thumbConceptEl = document.getElementById('aiThumbConceptDisplay');
+            if (thumbConceptEl) {
+                thumbConceptEl.textContent = data.thumbnail_concept || (data.thumbnail_directive && data.thumbnail_directive.visual_scene_direction) || 'High-contrast cinematic composition based on video context.';
+            }
+
+            // 8. Timestamps / Chapters Display
+            const tsDisplay = document.getElementById('aiTimestampsDisplay');
+            const tsCount = document.getElementById('aiTimestampCount');
+            const timestamps = Array.isArray(data.timestamps) ? data.timestamps : [];
+            if (tsDisplay) {
+                if (timestamps.length > 0) {
+                    tsDisplay.innerHTML = timestamps.map(ts => `
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
+                            <span style="background: rgba(168, 85, 247, 0.25); color: #c084fc; font-family: monospace; font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(ts.time)}</span>
+                            <span style="color: #f1f5f9; font-weight: 500;">${escapeHtml(ts.label)}</span>
+                        </div>
+                    `).join('');
+                    if (tsCount) tsCount.textContent = `${timestamps.length} chapters identified`;
+                } else {
+                    tsDisplay.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">No chapter timestamps needed for this video.</span>';
+                    if (tsCount) tsCount.textContent = 'None needed';
+                }
+            }
+
+            // 9. Strategic Insights
+            document.getElementById('aiSummaryInsights').textContent = data.summary_insights || 'Individual video evaluation completed via Gemini Multimodal Models.';
 
             // Scroll to results smoothly
             geminiResultsBox.scrollIntoView({ behavior: 'smooth' });
@@ -3552,57 +3672,142 @@ HTML_MAIN = """
             });
         }
 
-        // One-Click Auto-Publish Button
-        const btnOneClickPublish = document.getElementById('btnOneClickPublish');
-        if (btnOneClickPublish) {
-            btnOneClickPublish.addEventListener('click', async () => {
-                if (currentGeminiData && currentGeminiData.is_youtube_video) {
-                    if (!confirm(`Apply 4K Nano Banana Movie Poster & publish video ${currentGeminiData.video_id} to PUBLIC now?`)) {
-                        return;
+        // 1. Separate Action: Apply Changes to YouTube (Preserves Privacy)
+        const btnApplyMetadata = document.getElementById('btnApplyMetadata');
+        if (btnApplyMetadata) {
+            btnApplyMetadata.addEventListener('click', async () => {
+                if (!currentGeminiData || !currentGeminiData.video_id) {
+                    alert("Please analyze a YouTube video first before applying changes.");
+                    return;
+                }
+
+                btnApplyMetadata.disabled = true;
+                const originalHtml = btnApplyMetadata.innerHTML;
+                btnApplyMetadata.innerHTML = `<span class="spinner" style="width:16px;height:16px;"></span> Applying...`;
+                updatePipelineStatus('analyzing');
+
+                try {
+                    const payload = {
+                        action: 'apply',
+                        privacy: 'preserve',
+                        video_id: currentGeminiData.video_id,
+                        title: document.getElementById('videoTitle').value,
+                        description: document.getElementById('videoDesc').value,
+                        tags: window.tags || [],
+                        category_id: document.getElementById('categorySelect').value,
+                        made_for_kids: document.getElementById('madeForKids').checked,
+                        thumbnail_filename: selectedThumbnailFilename
+                    };
+
+                    const res = await fetch('/api/youtube/publish_optimized_video', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const data = await safeParseJson(res);
+                    if (!data.success) {
+                        throw new Error(data.error || "Failed to apply changes");
                     }
 
-                    btnOneClickPublish.disabled = true;
-                    const originalHtml = btnOneClickPublish.innerHTML;
-                    btnOneClickPublish.innerHTML = `<span class="spinner" style="width:16px;height:16px;"></span> Publishing to YouTube...`;
+                    updatePipelineStatus('applied');
+                    btnApplyMetadata.innerHTML = `✔ Changes Saved (Privacy Preserved)`;
+                    btnApplyMetadata.style.borderColor = '#10b981';
+                    btnApplyMetadata.style.color = '#10b981';
+                    alert(`✅ Metadata successfully applied to YouTube!\n\nVideo: ${currentGeminiData.video_id}\nPrivacy status has been preserved (${currentGeminiData.privacy_status || 'current'}).\n${data.thumbnail_updated ? 'Thumbnail updated!' : ''}`);
+                } catch (err) {
+                    updatePipelineStatus('error', err.message);
+                    alert("Apply Error: " + err.message);
+                    btnApplyMetadata.disabled = false;
+                    btnApplyMetadata.innerHTML = originalHtml;
+                }
+            });
+        }
 
-                    try {
-                        const payload = {
-                            video_id: currentGeminiData.video_id,
-                            title: document.getElementById('videoTitle').value,
-                            description: document.getElementById('videoDesc').value,
-                            tags: window.tags || [],
-                            category_id: document.getElementById('categorySelect').value,
-                            privacy: 'public',
-                            made_for_kids: document.getElementById('madeForKids').checked,
-                            thumbnail_filename: selectedThumbnailFilename
-                        };
+        // 2. Separate Action: Publish Public with Explicit Confirmation Modal
+        const btnPublishPublic = document.getElementById('btnPublishPublic');
+        const publishConfirmModal = document.getElementById('publishConfirmModal');
+        const btnConfirmGoPublic = document.getElementById('btnConfirmGoPublic');
 
-                        const res = await fetch('/api/youtube/publish_optimized_video', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
-                        });
+        window.closePublishConfirmModal = function() {
+            if (publishConfirmModal) {
+                publishConfirmModal.style.display = 'none';
+            }
+        };
 
-                        const data = await safeParseJson(res);
-                        if (!data.success) {
-                            throw new Error(data.error || "Publish failed");
-                        }
+        if (btnPublishPublic) {
+            btnPublishPublic.addEventListener('click', () => {
+                if (currentGeminiData && currentGeminiData.is_youtube_video) {
+                    // Populate modal fields
+                    const vidEl = document.getElementById('modalVideoId');
+                    if (vidEl) vidEl.textContent = currentGeminiData.video_id;
+                    const visEl = document.getElementById('modalVisibilityChange');
+                    if (visEl) visEl.textContent = `${currentGeminiData.privacy_status || 'PRIVATE'} ➔ PUBLIC`;
+                    const catEl = document.getElementById('modalCategory');
+                    if (catEl) catEl.textContent = `${document.getElementById('aiCategoryName').textContent} (ID: ${document.getElementById('categorySelect').value})`;
+                    const thEl = document.getElementById('modalThumbnailStatus');
+                    if (thEl) thEl.textContent = selectedThumbnailFilename ? `Attached (${selectedThumbnailFilename})` : 'Preserve current thumbnail';
+                    const tEl = document.getElementById('modalFinalTitle');
+                    if (tEl) tEl.textContent = document.getElementById('videoTitle').value;
 
-                        alert(`🎉 SUCCESS!\n\nVideo has been updated and published PUBLIC on YouTube!\n\nLink: ${data.video_url}\nThumbnail: 4K Nano Banana Poster Applied!`);
-                        window.open(data.video_url, '_blank');
-                        btnOneClickPublish.innerHTML = `✔ Live on YouTube (Public)`;
-                        btnOneClickPublish.style.background = '#10b981';
-                    } catch (err) {
-                        alert("Publish Error: " + err.message);
-                        btnOneClickPublish.disabled = false;
-                        btnOneClickPublish.innerHTML = originalHtml;
+                    if (publishConfirmModal) {
+                        publishConfirmModal.style.display = 'flex';
                     }
                     return;
                 }
 
+                // Fallback for local files
                 window.switchWorkspaceTab('manual');
                 const form = document.getElementById('uploadForm');
                 if (form) form.dispatchEvent(new Event('submit'));
+            });
+        }
+
+        if (btnConfirmGoPublic) {
+            btnConfirmGoPublic.addEventListener('click', async () => {
+                window.closePublishConfirmModal();
+                if (!currentGeminiData || !currentGeminiData.video_id) return;
+
+                btnPublishPublic.disabled = true;
+                const originalHtml = btnPublishPublic.innerHTML;
+                btnPublishPublic.innerHTML = `<span class="spinner" style="width:16px;height:16px;"></span> Publishing Public...`;
+                updatePipelineStatus('analyzing');
+
+                try {
+                    const payload = {
+                        action: 'publish',
+                        privacy: 'public',
+                        video_id: currentGeminiData.video_id,
+                        title: document.getElementById('videoTitle').value,
+                        description: document.getElementById('videoDesc').value,
+                        tags: window.tags || [],
+                        category_id: document.getElementById('categorySelect').value,
+                        made_for_kids: document.getElementById('madeForKids').checked,
+                        thumbnail_filename: selectedThumbnailFilename
+                    };
+
+                    const res = await fetch('/api/youtube/publish_optimized_video', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const data = await safeParseJson(res);
+                    if (!data.success) {
+                        throw new Error(data.error || "Publish failed");
+                    }
+
+                    updatePipelineStatus('published');
+                    btnPublishPublic.innerHTML = `✔ Live on YouTube (Public)`;
+                    btnPublishPublic.style.background = '#10b981';
+                    alert(`🎉 SUCCESS!\n\nVideo ${currentGeminiData.video_id} has been published PUBLIC on YouTube!\n\nLink: ${data.video_url}\n${data.thumbnail_updated ? 'Thumbnail updated!' : ''}`);
+                    window.open(data.video_url, '_blank');
+                } catch (err) {
+                    updatePipelineStatus('error', err.message);
+                    alert("Publish Error: " + err.message);
+                    btnPublishPublic.disabled = false;
+                    btnPublishPublic.innerHTML = originalHtml;
+                }
             });
         }
 
@@ -4914,13 +5119,16 @@ def gemini_analyze_youtube_video():
                 print(f"[YouTube Service Notice] {se}")
                 yt_service = None
 
+        force_refresh = bool(data.get('force_refresh', False))
+
         metadata = gemini_engine.analyze_youtube_video_with_gemini(
             video_id_or_url=vid,
             format_type=format_type,
             custom_instructions=instructions,
             channel_id=ch_id,
             youtube_service=yt_service,
-            existing_video_meta=existing_meta
+            existing_video_meta=existing_meta,
+            force_refresh=force_refresh
         )
         return jsonify(metadata), 200
     except Exception as e:
@@ -4952,33 +5160,52 @@ def publish_optimized_video():
             tags = []
 
         category_id = str(data.get('category_id') or '24')
-        privacy = (data.get('privacy') or 'public').lower()
-        if privacy not in ['public', 'unlisted', 'private']:
-            privacy = 'public'
+        action = (data.get('action') or 'publish').lower()
+        privacy = (data.get('privacy') or ('preserve' if action == 'apply' else 'public')).lower()
         made_for_kids = bool(data.get('made_for_kids', False))
         thumbnail_filename = (data.get('thumbnail_filename') or '').strip()
 
         youtube = build('youtube', 'v3', credentials=creds)
 
-        # 1. Update Video Metadata & Privacy (Publish Public / Specified Privacy)
-        body = {
-            'id': video_id,
-            'snippet': {
-                'title': title[:100] if title else f"Video {video_id}",
-                'description': description[:5000],
-                'tags': tags[:50],
-                'categoryId': category_id
-            },
-            'status': {
-                'privacyStatus': privacy,
-                'selfDeclaredMadeForKids': made_for_kids
+        # 1. Update Video Metadata & Privacy
+        # If action is 'apply' or privacy is 'preserve': update snippet ONLY, leaving privacyStatus untouched
+        if action == 'apply' or privacy == 'preserve':
+            body = {
+                'id': video_id,
+                'snippet': {
+                    'title': title[:100] if title else f"Video {video_id}",
+                    'description': description[:5000],
+                    'tags': tags[:50],
+                    'categoryId': category_id
+                }
             }
-        }
-
-        youtube.videos().update(
-            part='snippet,status',
-            body=body
-        ).execute()
+            youtube.videos().update(
+                part='snippet',
+                body=body
+            ).execute()
+            status_msg = "Changes applied to YouTube (privacy preserved)!"
+            resulting_privacy = "preserved"
+        else:
+            # Explicit publish: update snippet and set privacyStatus = 'public'
+            body = {
+                'id': video_id,
+                'snippet': {
+                    'title': title[:100] if title else f"Video {video_id}",
+                    'description': description[:5000],
+                    'tags': tags[:50],
+                    'categoryId': category_id
+                },
+                'status': {
+                    'privacyStatus': 'public' if privacy == 'public' else privacy,
+                    'selfDeclaredMadeForKids': made_for_kids
+                }
+            }
+            youtube.videos().update(
+                part='snippet,status',
+                body=body
+            ).execute()
+            status_msg = "Video successfully published PUBLIC on YouTube!"
+            resulting_privacy = "public"
 
         # 2. Upload 4K Nano Banana Thumbnail if provided
         thumb_updated = False
@@ -5004,17 +5231,17 @@ def publish_optimized_video():
             'success': True,
             'video_id': video_id,
             'video_url': f"https://youtu.be/{video_id}",
-            'privacy': privacy,
+            'privacy': resulting_privacy,
             'category_id': category_id,
             'thumbnail_updated': thumb_updated,
             'thumbnail_notice': thumb_err,
-            'message': f"Video successfully optimized and published to YouTube as {privacy.upper()}!"
+            'message': status_msg
         }), 200
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"Error publishing video: {e}")
-        return jsonify({'error': str(e) or 'Failed to publish optimized video'}), 500
+        print(f"Error publishing/updating video: {e}")
+        return jsonify({'error': str(e) or 'Failed to update video on YouTube'}), 500
 
 # ==============================================
 # YOUTUBE CHUNKED UPLOAD PIPELINE
