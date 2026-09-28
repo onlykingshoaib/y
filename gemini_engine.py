@@ -7,54 +7,38 @@ import hashlib
 from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
-import channel_key_store
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GEMINI_CONFIG_FILE = os.path.join(BASE_DIR, "gemini_config.json")
 THUMBNAILS_DIR = os.path.join(BASE_DIR, "uploads", "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 
-# Production Gemini Multimodal Models (2026 Cutting-Edge Production Models)
-DEFAULT_MODEL = "gemini-3.8-flash"
-FALLBACK_MODELS = [
+# Dynamic Auto-Routing Multimodal Models (Targeting Google's dynamic default multimodal aliases)
+AUTO_ROUTING_MODELS = [
+    "gemini-3.5-flash-lite",
     "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-flash-latest",
-    "gemini-flash-lite-latest",
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-pro-latest",
-    "gemini-3.1-pro-preview",
+    "gemini-flash-latest"
 ]
-
-# Nano Banana 4K Thumbnail Generation Models (Direct Multimodal Image)
-NANO_BANANA_IMAGE_MODELS = [
-    "gemini-3.1-flash-image",
-    "gemini-3.1-flash-image-preview",
-    "gemini-3-pro-image",
-    "gemini-3-pro-image-preview",
-    "gemini-3.1-flash-lite-image",
-]
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 
 def _normalize_model_name(model_name: str) -> str:
-    """Normalizes legacy or deprecated models to active 2026 cutting-edge production Gemini models."""
+    """Normalizes model name to active 2026 production Gemini multimodal models."""
     m = (model_name or "").strip()
     if not m:
         return DEFAULT_MODEL
     if m.startswith("models/"):
         m = m[7:]
 
-    # Map deprecated / older models to the newest equivalent versions
     legacy_replacements = {
         "gemini-2.5-flash": "gemini-3.8-flash",
         "gemini-2.5-pro": "gemini-3.7-flash",
         "gemini-2.0-flash": "gemini-3.6-flash",
         "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
         "gemini-1.5-flash": "gemini-flash-latest",
-        "gemini-1.5-pro": "gemini-pro-latest",
+        "gemini-1.5-pro": "gemini-3.8-flash",
         "gemini-1.0-pro": "gemini-3.8-flash",
         "gemini-2.0-flash-exp": "gemini-3.6-flash",
     }
@@ -63,17 +47,15 @@ def _normalize_model_name(model_name: str) -> str:
 
 def get_gemini_config(channel_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Loads Gemini API key and model selection.
+    Loads Gemini API key and active model selection.
     Checks in order:
-    1. Channel-bound 10-key pool in Database / Persistent Store (channel_key_store)
+    1. Local gemini_config.json file
     2. Environment variable GEMINI_API_KEY
-    3. Local gemini_config.json file
     """
     config = {
         "api_key": "",
         "model": DEFAULT_MODEL,
         "is_configured": False,
-        "pool_count": 0,
         "channel_id": channel_id or "default"
     }
 
@@ -82,21 +64,12 @@ def get_gemini_config(channel_id: Optional[str] = None) -> Dict[str, Any]:
             with open(GEMINI_CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
                 saved_key = saved.get("api_key", "").strip()
-                if channel_key_store._is_valid_real_gemini_key(saved_key):
+                if saved_key and (saved_key.startswith("AIza") or saved_key.startswith("AQ.")):
                     config["api_key"] = saved_key
                 saved_model = _normalize_model_name(saved.get("model", DEFAULT_MODEL))
                 config["model"] = saved_model
         except Exception as e:
             print(f"Error reading gemini_config.json: {e}")
-
-    try:
-        pool_key = channel_key_store.get_next_channel_key(channel_id)
-        pool_keys = channel_key_store.get_channel_keys(channel_id)
-        if pool_key:
-            config["api_key"] = pool_key
-            config["pool_count"] = len(pool_keys)
-    except Exception as e:
-        print(f"Notice checking channel_key_store: {e}")
 
     env_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if env_key and not config["api_key"]:
@@ -106,97 +79,80 @@ def get_gemini_config(channel_id: Optional[str] = None) -> Dict[str, Any]:
     return config
 
 
-def save_gemini_config(api_key: str = "", model: str = DEFAULT_MODEL, channel_id: Optional[str] = None) -> Dict[str, Any]:
-    """Saves Gemini API key and model selection to local file and channel key pool."""
+def validate_and_save_gemini_key(api_key: str) -> Dict[str, Any]:
+    """
+    1-Click Universal Gemini API Key Validation & Connection:
+    Pings Google GenAI across the dynamic auto-routing models list.
+    Saves securely to gemini_config.json on success.
+    """
     clean_key = (api_key or "").strip()
-    norm_model = _normalize_model_name(model)
-    existing_key = ""
-    if os.path.exists(GEMINI_CONFIG_FILE):
-        try:
-            with open(GEMINI_CONFIG_FILE, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-                existing_key = (saved.get("api_key") or "").strip()
-        except Exception:
-            pass
+    if not clean_key:
+        return {"success": False, "error": "API key cannot be empty"}
 
-    final_key = clean_key or existing_key
-    data = {
-        "api_key": final_key,
-        "model": norm_model,
-        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
-    }
-    with open(GEMINI_CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    try:
+        from google import genai
+        from google.genai import types
+        from google.genai import types
+        client = genai.Client(api_key=clean_key, http_options=types.HttpOptions(timeout=20000))
+        working_model = None
+        last_err = None
 
-    if clean_key:
-        try:
-            channel_key_store.add_channel_key(channel_id or "default", clean_key, verify=False)
-        except Exception as e:
-            print(f"Notice adding key to channel_key_store: {e}")
+        for m in AUTO_ROUTING_MODELS:
+            try:
+                resp = client.models.generate_content(model=m, contents=["Respond with 'OK'"])
+                if resp and resp.text:
+                    working_model = m
+                    break
+            except Exception as me:
+                last_err = me
+                continue
 
-    if data["api_key"]:
-        os.environ["GEMINI_API_KEY"] = data["api_key"]
-    return {
-        "success": True,
-        "model": data["model"],
-        "is_configured": bool(data["api_key"])
-    }
+        if not working_model:
+            return {
+                "success": False,
+                "error": f"API key validation failed: {str(last_err or 'No responsive multimodal model found')}"
+            }
+
+        save_data = {
+            "api_key": clean_key,
+            "model": working_model,
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        with open(GEMINI_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(save_data, f, indent=2)
+
+        os.environ["GEMINI_API_KEY"] = clean_key
+        return {
+            "success": True,
+            "model": working_model,
+            "message": f"Successfully connected & validated using {working_model}!"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def save_gemini_config(api_key: str = "", model: str = DEFAULT_MODEL, channel_id: Optional[str] = None) -> Dict[str, Any]:
+    """Saves Gemini API key and model selection."""
+    if api_key:
+        return validate_and_save_gemini_key(api_key)
+    cfg = get_gemini_config()
+    return {"success": True, "model": cfg.get("model", DEFAULT_MODEL), "is_configured": cfg.get("is_configured", False)}
 
 
 def get_genai_client(channel_id: Optional[str] = None, explicit_key: Optional[str] = None):
-    """Initializes and returns the google-genai Client using the channel's key pool."""
+    """Initializes and returns the google-genai Client with dynamic auto-timeout."""
     from google import genai
+    from google.genai import types
     if explicit_key:
-        return genai.Client(api_key=explicit_key)
+        return genai.Client(api_key=explicit_key, http_options=types.HttpOptions(timeout=20000))
     cfg = get_gemini_config(channel_id)
     if not cfg["is_configured"]:
-        raise ValueError("Gemini API key is not configured. Please add your Gemini API key in the Studio settings.")
-    return genai.Client(api_key=cfg["api_key"])
-
-
-def execute_with_key_rotation(channel_id: Optional[str], func, *args, **kwargs):
-    """
-    Executes a function `func(client, *args, **kwargs)` using the channel's 10-key pool.
-    If a key hits 429 Resource Exhausted / Quota Exceeded or 403 Invalid Key, it automatically
-    rotates seamlessly to the next available key in the pool.
-    """
-    from google import genai
-    pool_keys = channel_key_store.get_channel_keys(channel_id)
-    if not pool_keys:
-        cfg = get_gemini_config(channel_id)
-        if cfg["api_key"]:
-            pool_keys = [cfg["api_key"]]
-        else:
-            raise ValueError("No Gemini API keys configured in pool. Please add at least 1 key in '⚙️ Configure API Key'.")
-
-    max_attempts = max(len(pool_keys), 1)
-    last_err = None
-
-    for attempt in range(max_attempts):
-        active_key = channel_key_store.get_next_channel_key(channel_id) or pool_keys[attempt % len(pool_keys)]
-        client = genai.Client(api_key=active_key)
-        try:
-            return func(client, *args, **kwargs)
-        except Exception as e:
-            last_err = e
-            err_str = str(e).lower()
-            is_quota_or_auth = any(w in err_str for w in [
-                "429", "resource_exhausted", "quota", "rate limit", "too many requests",
-                "403", "api_key_invalid", "permission_denied", "503", "overloaded"
-            ])
-            if is_quota_or_auth:
-                masked_k = getattr(channel_key_store, "mask_key", lambda x: "****")(active_key)
-                if hasattr(channel_key_store, "mark_key_rate_limited"):
-                    channel_key_store.mark_key_rate_limited(active_key, cooldown_seconds=120)
-                print(f"[KeyPool Failover] Key {masked_k} hit quota/error ({str(e)[:80]}). Rotating to next key (attempt {attempt+1}/{max_attempts})...")
-                continue
-            raise e
-
-    raise last_err
+        raise ValueError("Gemini API key is not configured. Please enter your API key in '⚙️ Configure API Key'.")
+    return genai.Client(api_key=cfg["api_key"], http_options=types.HttpOptions(timeout=20000))
 
 
 def get_gemini_status(channel_id: Optional[str] = None) -> Dict[str, Any]:
-    """Checks if Gemini is configured and returns status + masked key + pool info."""
+    """Checks if Gemini is configured and returns status + masked key."""
     cfg = get_gemini_config(channel_id)
     key = cfg["api_key"]
     masked = ""
@@ -205,13 +161,13 @@ def get_gemini_status(channel_id: Optional[str] = None) -> Dict[str, Any]:
     elif key:
         masked = "****"
 
-    pool_status = channel_key_store.get_channel_key_pool_status(channel_id)
     return {
         "is_configured": cfg["is_configured"],
-        "model": cfg["model"],
-        "masked_key": masked,
-        "pool": pool_status
+        "has_key": cfg["is_configured"],
+        "model": f"Auto-Routing ({cfg['model']})",
+        "masked_key": masked
     }
+
 
 
 def save_client_frame(
@@ -1099,94 +1055,22 @@ def generate_dynamic_ai_thumbnail(
         f"Strictly {aspect_ratio} aspect ratio, photorealistic 4K poster composition, extreme dynamic range, razor-sharp eyes."
     )
 
-    generated_bgr = None
+    # High-Impact 4K Poster-Grade Genre-Atmospheric Compositor
+    # Preserves 100% character face / action subject + replaces mundane backdrop with 4K cinematic lighting
+    base_frame = reference_frame_bgr
+    if base_frame is None or base_frame.size == 0:
+        base_frame = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+
+    generated_bgr = _render_ultra_high_contrast_ai_visual(
+        base_frame,
+        aspect_ratio=aspect_ratio,
+        metadata=metadata,
+        focus_box=reference_face_box,
+        video_seed_str=video_seed_str,
+        apply_typography=True,
+        replace_mundane_backdrop=True
+    )
     generation_engine = f"nano-banana-4k-{preset['mode']}"
-
-    # Prepare both the tight character face reference PIL and full scene reference PIL
-    face_ref_pil = None
-    full_ref_pil = None
-    if reference_face_crop_bgr is not None and reference_face_crop_bgr.size > 0:
-        face_rgb = cv2.cvtColor(reference_face_crop_bgr, cv2.COLOR_BGR2RGB)
-        face_ref_pil = Image.fromarray(face_rgb)
-
-    if reference_frame_bgr is not None and reference_frame_bgr.size > 0:
-        cropped_ref = fit_and_crop_to_aspect_ratio(
-            reference_frame_bgr,
-            aspect_ratio=aspect_ratio,
-            focus_box=reference_face_box,
-            high_res=False
-        )
-        ref_rgb = cv2.cvtColor(cropped_ref, cv2.COLOR_BGR2RGB)
-        full_ref_pil = Image.fromarray(ref_rgb)
-        if face_ref_pil is None:
-            auto_face_bgr = extract_character_face_reference_crop(reference_frame_bgr, reference_face_box)
-            face_ref_pil = Image.fromarray(cv2.cvtColor(auto_face_bgr, cv2.COLOR_BGR2RGB))
-
-    # Attempt 1: Targeted Fast Imagen / Gemini Image Generation
-    try:
-        from google.genai import types
-
-        def _try_nano_banana_or_imagen(client):
-            contents_payload = []
-            if face_ref_pil is not None:
-                contents_payload.append(face_ref_pil)
-            contents_payload.append(nano_banana_prompt)
-
-            # Direct multimodal image generation via Gemini 3.x image models
-            for img_model in NANO_BANANA_IMAGE_MODELS:
-                try:
-                    resp = client.models.generate_content(
-                        model=img_model,
-                        contents=contents_payload,
-                        config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
-                    )
-                    if resp and getattr(resp, "candidates", None):
-                        for cand in resp.candidates:
-                            content = getattr(cand, "content", None)
-                            for part in (getattr(content, "parts", None) or []):
-                                inline = getattr(part, "inline_data", None)
-                                if inline and getattr(inline, "data", None):
-                                    img_bytes = inline.data
-                                    arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                                    decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                                    if decoded is not None and decoded.size > 0:
-                                        return (decoded, img_model)
-                except Exception:
-                    continue
-
-            return (None, None)
-
-        gen_img, used_engine = execute_with_key_rotation(channel_id, _try_nano_banana_or_imagen)
-        if gen_img is not None and gen_img.size > 0:
-            generated_bgr = fit_and_crop_to_aspect_ratio(gen_img, aspect_ratio=aspect_ratio, high_res=True)
-            generated_bgr = _render_ultra_high_contrast_ai_visual(
-                generated_bgr,
-                aspect_ratio=aspect_ratio,
-                metadata=metadata,
-                focus_box=None,
-                video_seed_str=video_seed_str,
-                apply_typography=False,
-                replace_mundane_backdrop=False
-            )
-            generation_engine = used_engine or "gemini-nano-banana-4k"
-            print(f"[Nano Banana 4K Thumbnail] Generated Slot 1 AI Thumbnail via {generation_engine} ({aspect_ratio}, Genre: {genre_category})")
-    except Exception as e:
-        print(f"[Nano Banana 4K Thumbnail] Using 4K Genre-Atmospheric Character-Preserving Compositor ({str(e)[:80]})...")
-
-    # Attempt 2 / 4K Poster-Grade Genre-Atmospheric Compositor (Preserves 100% character face + replaces mundane backdrop)
-    if generated_bgr is None:
-        base_frame = reference_frame_bgr
-        if base_frame is None or base_frame.size == 0:
-            base_frame = np.zeros((target_h, target_w, 3), dtype=np.uint8)
-        generated_bgr = _render_ultra_high_contrast_ai_visual(
-            base_frame,
-            aspect_ratio=aspect_ratio,
-            metadata=metadata,
-            focus_box=reference_face_box,
-            video_seed_str=video_seed_str,
-            apply_typography=True,
-            replace_mundane_backdrop=True
-        )
 
     uid = uuid.uuid4().hex[:8]
     ratio_slug = "9x16" if aspect_ratio == "9:16" else "16x9"
@@ -1672,27 +1556,22 @@ Format suggestions clearly with labels like:
 
     try:
         reply_text = ""
-        models_to_try = [model_name] + [m for m in FALLBACK_MODELS if m != model_name]
+        client = get_genai_client()
 
-        def _call_chat(client):
-            nonlocal reply_text
-            for m in models_to_try:
-                try:
-                    response = client.models.generate_content(
-                        model=m,
-                        contents=[full_prompt]
-                    )
-                    reply_text = response.text or ""
-                    if reply_text:
-                        return reply_text
-                except Exception as ce:
-                    err_s = str(ce).lower()
-                    if any(t in err_s for t in ["api_key_invalid", "api key not valid"]):
-                        raise ce
-                    continue
-            return reply_text
-
-        execute_with_key_rotation(channel_id, _call_chat)
+        for m in AUTO_ROUTING_MODELS:
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=[full_prompt]
+                )
+                reply_text = response.text or ""
+                if reply_text:
+                    break
+            except Exception as ce:
+                err_s = str(ce).lower()
+                if any(t in err_s for t in ["api_key_invalid", "api key not valid"]):
+                    raise ce
+                continue
 
         if not reply_text:
             reply_text = "I'm currently optimizing for high traffic, but here is a quick tip: Focus your title on high curiosity + clear emotional hook and keep YouTube Shorts under 50 characters."
@@ -1786,71 +1665,84 @@ def parse_iso8601_duration(dur_str: str) -> int:
 
 def fetch_youtube_video_transcript(video_id: str) -> Tuple[str, List[str]]:
     """
-    Fetches 100% accurate spoken dialogues / transcript snippets using youtube-transcript-api.
-    Tries Hindi, English, Urdu, and auto-generated transcripts with translation fallback.
+    Fetches spoken dialogues / transcript snippets using youtube-transcript-api.
+    Uses a daemon thread with strict 2.0s timeout so network hangs never block the pipeline.
     """
+    import threading
     transcript_text = ""
     snippets: List[str] = []
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi
-        api = YouTubeTranscriptApi()
-        fetched = None
-        try:
-            fetched = api.fetch(video_id, languages=['hi', 'en', 'ur', 'auto'])
-        except Exception:
-            pass
+    fetched_container = []
 
-        if not fetched:
+    def _fetch_worker():
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            api = YouTubeTranscriptApi()
+            try:
+                res = api.fetch(video_id, languages=['hi', 'en', 'ur', 'auto'])
+                if res:
+                    fetched_container.append(res)
+                    return
+            except Exception:
+                pass
             try:
                 t_list = api.list(video_id)
                 for t in t_list:
                     try:
-                        fetched = t.fetch()
-                        if fetched:
-                            break
+                        f = t.fetch()
+                        if f:
+                            fetched_container.append(f)
+                            return
                     except Exception:
                         continue
             except Exception:
                 pass
+        except Exception:
+            pass
 
-        if fetched:
-            for item in fetched:
-                if hasattr(item, 'text'):
-                    t = (item.text or "").strip()
-                elif isinstance(item, dict):
-                    t = (item.get('text') or "").strip()
-                else:
-                    t = str(item).strip()
-                if t:
-                    snippets.append(t)
-            transcript_text = " ".join(snippets)
-    except Exception as e:
-        print(f"[YouTube Transcript] Notice: {e}")
+    th = threading.Thread(target=_fetch_worker, daemon=True)
+    th.start()
+    th.join(timeout=2.0)
+
+    if fetched_container:
+        fetched = fetched_container[0]
+        for item in fetched:
+            if hasattr(item, 'text'):
+                t = (item.text or "").strip()
+            elif isinstance(item, dict):
+                t = (item.get('text') or "").strip()
+            else:
+                t = str(item).strip()
+            if t:
+                snippets.append(t)
+        transcript_text = " ".join(snippets)
 
     return transcript_text, snippets
 
 
-def download_youtube_thumbnail_frame(video_id: str) -> Tuple[Optional[np.ndarray], str]:
+def download_youtube_thumbnail_frame(video_id: str, preferred_url: Optional[str] = None) -> Tuple[Optional[np.ndarray], str]:
     """
     Downloads the highest-resolution thumbnail for a YouTube video to use as facial reference.
-    Tries maxresdefault.jpg -> sddefault.jpg -> hqdefault.jpg.
+    Tries preferred_url -> maxresdefault.jpg -> hqdefault.jpg -> sddefault.jpg.
     Returns (cv2_frame_bgr, local_saved_path).
     """
     import urllib.request
     import cv2
 
-    urls_to_try = [
+    urls_to_try = []
+    if preferred_url and preferred_url.startswith("http"):
+        urls_to_try.append(preferred_url)
+    urls_to_try.extend([
         f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
-        f"https://i.ytimg.com/vi/{video_id}/sddefault.jpg",
-        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-    ]
+        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        f"https://i.ytimg.com/vi/{video_id}/sddefault.jpg"
+    ])
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
     raw_bytes = None
     for url in urls_to_try:
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=6) as response:
+            with urllib.request.urlopen(req, timeout=2.5) as response:
                 if response.status == 200:
                     data = response.read()
                     if len(data) > 1024:
@@ -1907,29 +1799,9 @@ def analyze_youtube_video_with_gemini(
     if not video_id:
         raise ValueError(f"Invalid YouTube URL or Video ID: '{video_id_or_url}'")
 
-    cfg = get_gemini_config(channel_id)
-    if not cfg["is_configured"]:
-        alt_ch = channel_key_store.get_first_authenticated_channel_id()
-        if alt_ch and alt_ch != channel_id:
-            cfg = get_gemini_config(alt_ch)
-            channel_id = alt_ch
-
-    if not cfg["is_configured"]:
-        # Check if any keys exist in the global store
-        all_avail = channel_key_store.get_channel_keys("default")
-        if all_avail:
-            cfg["api_key"] = all_avail[0]
-            cfg["is_configured"] = True
-
+    cfg = get_gemini_config()
     if not cfg["is_configured"]:
         raise ValueError("Gemini API key is not configured. Please enter your API key in '⚙️ Configure API Key'.")
-
-    target_model = _normalize_model_name(cfg.get("model") or DEFAULT_MODEL)
-    candidate_models = [target_model] + [m for m in FALLBACK_MODELS if m != target_model]
-    models_to_try = []
-    for m in candidate_models:
-        if m and m not in models_to_try:
-            models_to_try.append(m)
 
     # 1. Fetch metadata from YouTube API if available
     yt_title = ""
@@ -1987,10 +1859,10 @@ def analyze_youtube_video_with_gemini(
     # 3. Fetch 100% accurate spoken audio / transcript from YouTube
     transcript_text, snippets = fetch_youtube_video_transcript(video_id)
     if not transcript_text:
-        transcript_text = f"Context from YouTube Video '{yt_title}'. Spoken dialogues processed for storyline and character dynamic."
+        transcript_text = f"Context from YouTube Video '{yt_title}'. Video analyzed visually and contextually."
 
-    # 4. Download High-Res Thumbnail for Face Reference
-    raw_frame_bgr, local_thumb_path = download_youtube_thumbnail_frame(video_id)
+    pref_thumb = (existing_video_meta.get("thumbnail") or "") if existing_video_meta else ""
+    raw_frame_bgr, local_thumb_path = download_youtube_thumbnail_frame(video_id, preferred_url=pref_thumb)
 
     # Detect character faces & extract #1 highest-emotion character face crop
     frontal_cascade = None
@@ -2010,6 +1882,7 @@ def analyze_youtube_video_with_gemini(
 
     face_box = None
     face_crop_bgr = None
+    ref_pil = None
     if raw_frame_bgr is not None and raw_frame_bgr.size > 0:
         _, face_count, best_box, _ = _score_frame_emotion_and_motion(
             raw_frame_bgr,
@@ -2019,6 +1892,11 @@ def analyze_youtube_video_with_gemini(
         )
         face_box = best_box
         face_crop_bgr = extract_character_face_reference_crop(raw_frame_bgr, face_box)
+        try:
+            ref_rgb = cv2.cvtColor(raw_frame_bgr, cv2.COLOR_BGR2RGB)
+            ref_pil = Image.fromarray(ref_rgb)
+        except Exception:
+            ref_pil = None
 
     # Save Slot 2: Original YouTube High-Res Frame (cropped to aspect ratio)
     slot_2_filename = f"yt_orig_{video_id}_{aspect_ratio.replace(':', 'x')}.jpg"
@@ -2049,10 +1927,10 @@ def analyze_youtube_video_with_gemini(
         "height": target_h
     }
 
-    # 5. Multimodal Story Analysis with Gemini 2.5
+    # 5. Dual-Track Multimodal Analysis with Gemini (Vision + Dialogue)
     prompt_str = f"""
-You are the world's most elite YouTube Growth Strategist & Cinematic Screenplay Analyst.
-You are analyzing an official YouTube video pre-processed with 100% accurate spoken audio dialogues.
+You are the world's most elite YouTube Growth Strategist & Multimodal Video Analyst.
+You are analyzing an official YouTube video using BOTH visual keyframe data AND spoken audio dialogues.
 
 VIDEO SPECS:
 - Video ID: {video_id}
@@ -2063,54 +1941,79 @@ VIDEO SPECS:
 - 100% SPOKEN AUDIO TRANSCRIPT / DIALOGUES:
 \"\"\"{transcript_text[:12000]}\"\"\"
 
-CREATOR INSTRUCTIONS:
-{custom_instructions or "Maximize organic search SEO, viral curiosity CTR, and algorithmic engagement."}
+CATEGORY-AGNOSTIC MULTIMODAL INSTRUCTIONS:
+1. IF SPEECH / DIALOGUE IS PRESENT:
+   - Deeply analyze dialogue to uncover true characters, emotional stakes, narrative arc, plot twists, and climactic turning points.
+2. IF SPEECH IS ABSENT OR MINIMAL (e.g. Fast Gaming like PUBG/BGMI/FreeFire, Action Montage, Silent Ambient Horror):
+   - Visually analyze the keyframe: look at game HUD (health bars, minimap, kill feed, weapon icons), character skins/combat, atmospheric lighting, and visible on-screen text to identify the exact game/genre and action intensity!
+3. AUTOMATED METADATA ASSEMBLY:
+   - Title: High-impact, click-worthy hook under 70 characters (under 50 chars for Shorts + #Shorts #Viral; High-volume [Hook | Keyword] for Long-form).
+   - Description: Structured 3-4 sentence narrative/gameplay overview, key chapter points/highlights, and relevant viral hashtags.
+   - Tags: Exactly 15 to 20 targeted, highly searchable keyword phrases.
+   - Category Mapping: Assign the exact YouTube Category ID:
+     * 20: Gaming (PUBG, BGMI, Free Fire, Minecraft, GTA, esports, etc.)
+     * 1: Film & Animation (Movie recaps, stories, cinema breakdowns)
+     * 24: Entertainment (General entertainment, viral clips, reactions)
+     * 23: Comedy (Funny moments, roasts, pranks)
+     * 22: People & Blogs (Vlogs, daily content)
+     * 26: Howto & Style (Tutorials, guides, lifehacks)
+     * 28: Science & Technology (Tech reviews, coding, engineering)
+4. THUMBNAIL DIRECTIVE:
+   - text_overlay: 3-4 word 3D movie/gaming hook typography in ALL CAPS (e.g., "MAFIA BOSS", "1 vs 4 CLUTCH", "END GAME").
+   - visual_scene_direction: Epic high-budget blockbuster poster composition description matching the genre.
+   - recommended_color_theme: High-contrast cinematic color palette.
 
-TASK:
-1. Deeply analyze the dialogues to uncover 100% of the true characters, plot twists, decisive conflict, and emotional stakes.
-2. Determine the exact GENRE: War/Heroic, Horror/Thriller, Comedy/Drama, Mystery/Suspense, Emotional/Action.
-3. Return a STRICT JSON object with these EXACT keys:
+Return a STRICT JSON object with these EXACT keys:
 {{
-  "detected_genre": "War/Heroic",
-  "detected_genre_emotion": "Genre • High Suspense Emotional Climax",
-  "detected_language": "Hindi / Hinglish",
-  "primary_context": "2-4 word core character/event",
-  "climactic_context": "The decisive turning point or shock revelation",
-  "spoken_audio_transcript": "2-3 sentence grounded summary of what was actually said",
-  "true_entities": ["Main Character", "Key Object", "Setting"],
+  "detected_genre": "Gaming or Film & Animation or Action",
+  "detected_genre_emotion": "Genre • High Intensity Climax",
+  "detected_language": "Hindi / Hinglish / English",
+  "primary_context": "2-4 word core character, game, or event",
+  "climactic_context": "The decisive turning point, squad wipe, or shock revelation",
+  "spoken_audio_transcript": "2-3 sentence grounded summary of what was said or observed",
+  "true_entities": ["Main Entity", "Key Weapon/Item", "Setting"],
   "plot_twists": "Key dramatic shift or climax",
-  "visual_timeline_analysis": "Visual and atmospheric tone of the video",
-  "facial_expression_analysis": "Character facial expression at peak intensity",
-  "viral_title": "Primary high-CTR title (under 50 chars for Shorts + #Shorts #Viral; High-volume [Hook | Keyword] for Long-form)",
+  "visual_timeline_analysis": "Visual tone and HUD/action details",
+  "facial_expression_analysis": "Character facial expression or action intensity",
+  "viral_title": "Primary high-CTR hook title under 70 characters",
   "alternative_titles": [
-    "Compelling Curiosity Hook Title",
-    "High-Search Volume Keyword Title",
-    "Dramatic Story-Driven Title"
+    "Curiosity Hook Title Option 1",
+    "High-Search Keyword Title Option 2",
+    "Dramatic Action Title Option 3"
   ],
-  "description": "Engaging description with opening hook, comprehensive context breakdown, chapter timestamps (if long-form), 3-5 hashtags, and creator CTA.",
-  "hashtags": ["#Shorts", "#Trending", "#Viral", "#MovieExplained", "#HindiStory"],
+  "description": "Engaging description with opening hook, gameplay/story breakdown, 3-5 hashtags, and creator CTA.",
+  "hashtags": ["#Shorts", "#Trending", "#Viral", "#Gaming", "#Action"],
   "search_tags": ["15 to 20 high-volume search intent keywords and phrases"],
-  "category_id": "24",
-  "category_name": "Entertainment",
+  "category_id": "1 or 20 or 24 or 23",
+  "category_name": "Film & Animation or Gaming or Entertainment",
   "thumbnail_directive": {{
     "text_overlay": "3-4 word 3D movie hook typography in ALL CAPS",
-    "visual_scene_direction": "Epic high-budget blockbuster movie poster composition matching the genre",
+    "visual_scene_direction": "Epic high-contrast cinematic poster composition",
     "recommended_color_theme": "High-contrast cinematic color palette"
   }},
-  "summary_insights": "Actionable strategic insight on why this packaging will maximize retention and click-through rate."
+  "summary_insights": "Strategic insight on why this packaging will maximize retention and CTR."
 }}
 """
 
     metadata = None
     last_error = None
+    client = None
+    try:
+        client = get_genai_client()
+    except Exception as ge:
+        last_error = ge
 
-    def _call_gemini_analysis(client):
-        nonlocal metadata, last_error
-        for m in models_to_try:
+    if client:
+        contents_payload = []
+        if ref_pil is not None:
+            contents_payload.append(ref_pil)
+        contents_payload.append(prompt_str)
+
+        for m in AUTO_ROUTING_MODELS:
             try:
                 response = client.models.generate_content(
                     model=m,
-                    contents=[prompt_str],
+                    contents=contents_payload,
                     config={"response_mime_type": "application/json"}
                 )
                 text = response.text or ""
@@ -2118,19 +2021,13 @@ TASK:
                 clean_json = re.sub(r"^```\s*", "", clean_json, flags=re.MULTILINE)
                 clean_json = re.sub(r"```$", "", clean_json.strip())
                 parsed = json.loads(clean_json)
-                if isinstance(parsed, dict) and parsed.get("viral_title"):
+                if isinstance(parsed, dict) and (parsed.get("viral_title") or parsed.get("detected_genre")):
                     metadata = parsed
                     metadata["model_used"] = m
-                    return metadata
+                    break
             except Exception as ce:
                 last_error = ce
                 continue
-        return metadata
-
-    try:
-        execute_with_key_rotation(channel_id, _call_gemini_analysis)
-    except Exception as e:
-        print(f"[YouTube Video Analyzer] Gemini notice: {e}")
 
     # Fallback metadata if needed
     if not metadata:

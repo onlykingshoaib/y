@@ -23,7 +23,6 @@ import google.auth.transport.requests
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import gemini_engine
-import channel_key_store
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "youtube_studio_pro_permanent_production_secret_2026")
@@ -167,14 +166,6 @@ def get_active_channel_id_or_default(explicit_channel_id: str = None) -> str:
                     cid = str(acc['channels'][0].get('id') or '').strip()
                     if cid and cid.lower() != "default":
                         return cid
-    except Exception:
-        pass
-
-    try:
-        import channel_key_store
-        db_cid = channel_key_store.get_first_authenticated_channel_id()
-        if db_cid and db_cid.lower() != "default":
-            return db_cid
     except Exception:
         pass
 
@@ -2652,67 +2643,48 @@ HTML_MAIN = """
     <!-- GEMINI API CONFIG MODAL (10-KEY POOL)          -->
     <!-- ============================================== -->
     <div class="modal-overlay" id="geminiModalOverlay" style="display: none; pointer-events: none; opacity: 0; visibility: hidden; z-index: -100;">
-        <div class="modal-card" style="max-width: 640px; width: 95%; max-height: 90vh; overflow-y: auto; padding: 24px;">
-            <div class="modal-header" style="margin-bottom: 12px;">
-                <h3>
-                    <span>⚙️</span>
-                    <span>Gemini 10-Key Pool &amp; Auto-Rotation</span>
+        <div class="modal-card" style="max-width: 520px; width: 95%; max-height: 90vh; overflow-y: auto; padding: 24px;">
+            <div class="modal-header" style="margin-bottom: 14px;">
+                <h3 style="display: flex; align-items: center; gap: 8px; font-size: 17px; margin: 0;">
+                    <span>⚡</span>
+                    <span>Universal Gemini Multimodal AI</span>
                 </h3>
                 <button class="btn-close-chat" id="btnCloseKeyModal">&times;</button>
             </div>
             
-            <div style="background: rgba(168, 85, 247, 0.12); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
+            <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
-                    <div style="font-size: 13px; font-weight: 600; color: #f3e8ff;">
+                    <div style="font-size: 13px; font-weight: 600; color: #f0fdf4;">
                         Channel: <span id="modalActiveChannelTitle" style="color: #38bdf8;">YouTube Creator</span>
                     </div>
-                    <span id="poolCapacityBadge" style="font-size: 11px; background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.4); border-radius: 12px; padding: 2px 8px; font-weight: 600;">
-                        0 / 10 Keys Active
+                    <span id="geminiEngineStatusBadge" style="font-size: 11px; background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.4); border-radius: 12px; padding: 2px 8px; font-weight: 600;">
+                        Auto-Routing Active
                     </span>
                 </div>
-                <div style="font-size: 11.5px; color: #cbd5e1; line-height: 1.45;">
-                    🛡️ <strong>Persistent Database Storage:</strong> Keys are bound directly to this Channel ID in the database and persistent backups. Keys survive code updates, server restarts, and redeployments. <em>Only manual delete removes a key.</em>
+                <div style="font-size: 11.5px; color: #94a3b8; line-height: 1.45;">
+                    🤖 <strong>Self-Optimizing Multimodal Pipeline:</strong> Connects to Google's dynamic multimodal models (Gemini 3.8 / Flash / Auto-Failover). Zero manual model versioning required.
                 </div>
             </div>
 
-            <!-- 10 Slots Grid -->
-            <div style="margin-bottom: 16px;">
+            <!-- Single Universal API Key Box -->
+            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 16px; margin-bottom: 12px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <span style="font-size: 12px; font-weight: 700; color: #e2e8f0; text-transform: uppercase; letter-spacing: 0.5px;">Active 10-Key Pool (Round-Robin &bull; Auto-Failover on 429)</span>
-                    <button type="button" id="btnRefreshKeyPool" style="background: transparent; border: none; color: #a78bfa; font-size: 11px; cursor: pointer; text-decoration: underline;">🔄 Refresh</button>
+                    <span style="font-size: 13px; font-weight: 600; color: #f8fafc;">Universal Gemini API Key</span>
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #38bdf8; font-size: 11.5px; text-decoration: none;">Get Free Key &#8599;</a>
                 </div>
-                <div id="keySlotsList" style="display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; padding-right: 2px;">
-                    <div style="text-align: center; color: #94a3b8; font-size: 12px; padding: 20px;">Loading key pool...</div>
-                </div>
-            </div>
-
-            <!-- Add / Replace Key Box -->
-            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 14px; margin-bottom: 12px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <span style="font-size: 12.5px; font-weight: 600; color: #f3e8ff;">Add Key to Pool</span>
-                    <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #38bdf8; font-size: 11px; text-decoration: none;">Get Free Key &#8599;</a>
-                </div>
-                <div style="display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;">
-                    <input type="text" id="geminiApiKeyInput" placeholder="Enter Gemini API key (AIzaSy...)" style="flex: 1; min-width: 200px; margin-bottom: 0;">
-                    <button class="btn-ai-analyze" id="btnSaveGeminiKey" style="padding: 10px 16px; white-space: nowrap; font-size: 13px;">
-                        <span>+ Add to Pool</span>
+                <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
+                    <input type="password" id="geminiApiKeyInput" placeholder="Enter Gemini API key (AIzaSy...)" style="flex: 1; min-width: 220px; margin-bottom: 0;">
+                    <button class="btn-ai-analyze" id="btnSaveGeminiKey" style="padding: 10px 18px; white-space: nowrap; font-size: 13px;">
+                        <span>⚡ Connect &amp; Validate</span>
                     </button>
                 </div>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <div style="font-size: 11px; color: #94a3b8;">Active Model:</div>
-                    <select id="geminiModelSelect" style="flex: 1; padding: 6px 10px; font-size: 12px; margin-bottom: 0;">
-                        <option value="gemini-3.8-flash" selected>⚡ gemini-3.8-flash (Latest 2026 Flagship &bull; Dual-Track Ingestion)</option>
-                        <option value="gemini-3.7-flash">🧠 gemini-3.7-flash (Hybrid Reasoning &amp; Deep Plot Analysis)</option>
-                        <option value="gemini-3.6-flash">🚀 gemini-3.6-flash (Ultra-Fast 1.5s High-Speed)</option>
-                        <option value="gemini-3.5-flash-lite">⚡ gemini-3.5-flash-lite (Instant 0.7s Low-Latency)</option>
-                        <option value="gemini-flash-latest">🔄 gemini-flash-latest (Auto-Updating Google Flash)</option>
-                        <option value="gemini-flash-lite-latest">🔄 gemini-flash-lite-latest (Auto-Updating Google Lite)</option>
-                        <option value="gemini-pro-latest">👑 gemini-pro-latest (Elite Screenplay &amp; Metadata Architecture)</option>
-                    </select>
+                <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #94a3b8;">
+                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e;"></span>
+                    <span>Active Multi-Vision: <strong>Auto-Routing Gemini 3.8 / Flash</strong></span>
                 </div>
             </div>
 
-            <div id="geminiKeyStatusMsg" style="font-size: 12.5px; margin: 8px 0; display: none; padding: 8px 12px; border-radius: 6px;"></div>
+            <div id="geminiKeyStatusMsg" style="font-size: 12.5px; margin: 8px 0; display: none; padding: 10px 14px; border-radius: 6px;"></div>
         </div>
     </div>
 
@@ -2843,7 +2815,7 @@ HTML_MAIN = """
         }
 
         // ==============================================
-        // GEMINI 10-KEY POOL & AUTO-ROTATION ENGINE (FRONTEND)
+        // SINGLE UNIVERSAL GEMINI API INTEGRATION (FRONTEND)
         // ==============================================
         window.currentActiveChannelId = 'default';
         window.currentActiveChannelTitle = 'YouTube Creator';
@@ -2857,12 +2829,9 @@ HTML_MAIN = """
         const btnCloseKeyModal = document.getElementById('btnCloseKeyModal');
         const btnSaveGeminiKey = document.getElementById('btnSaveGeminiKey');
         const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
-        const geminiModelSelect = document.getElementById('geminiModelSelect');
         const geminiKeyStatusMsg = document.getElementById('geminiKeyStatusMsg');
         const modalActiveChannelTitle = document.getElementById('modalActiveChannelTitle');
-        const poolCapacityBadge = document.getElementById('poolCapacityBadge');
-        const keySlotsList = document.getElementById('keySlotsList');
-        const btnRefreshKeyPool = document.getElementById('btnRefreshKeyPool');
+        const geminiEngineStatusBadge = document.getElementById('geminiEngineStatusBadge');
 
         function openKeyModal() {
             const modalEl = geminiModalOverlay || window._detachedModals['geminiModalOverlay'];
@@ -2881,7 +2850,7 @@ HTML_MAIN = """
                 if (modalActiveChannelTitle) {
                     modalActiveChannelTitle.textContent = window.currentActiveChannelTitle || 'Active Channel';
                 }
-                loadChannelKeyPool(window.currentActiveChannelId);
+                checkGeminiStatus();
             }
         }
 
@@ -2903,186 +2872,11 @@ HTML_MAIN = """
         if (geminiNavPill) geminiNavPill.addEventListener('click', openKeyModal);
         if (btnOpenKeyModal) btnOpenKeyModal.addEventListener('click', openKeyModal);
         if (btnCloseKeyModal) btnCloseKeyModal.addEventListener('click', closeKeyModal);
-        if (btnRefreshKeyPool) btnRefreshKeyPool.addEventListener('click', () => loadChannelKeyPool(window.currentActiveChannelId));
         if (geminiModalOverlay) {
             geminiModalOverlay.addEventListener('click', (e) => {
                 if (e.target === geminiModalOverlay) closeKeyModal();
             });
         }
-
-        async function loadChannelKeyPool(channelId) {
-            const cleanId = channelId || window.currentActiveChannelId || 'default';
-            if (modalActiveChannelTitle) {
-                modalActiveChannelTitle.textContent = window.currentActiveChannelTitle || cleanId;
-            }
-            try {
-                const res = await fetch(`/api/channel/gemini_keys?channel_id=${encodeURIComponent(cleanId)}`);
-                const data = await safeParseJson(res);
-                if (data.success && data.pool) {
-                    renderKeyPoolSlots(data.pool);
-                    updatePoolNavStatus(data.pool);
-
-                    // Triple redundancy auto-sync from localStorage if DB returned 0 keys
-                    if (data.pool.total_active_keys === 0) {
-                        tryAutoSyncFromLocal(cleanId);
-                    }
-                }
-            } catch (err) {
-                console.error("Error loading channel key pool:", err);
-            }
-        }
-
-        function renderKeyPoolSlots(pool) {
-            if (!keySlotsList) return;
-            if (poolCapacityBadge) {
-                poolCapacityBadge.textContent = `${pool.total_active_keys} / 10 Keys Active`;
-                poolCapacityBadge.style.color = pool.total_active_keys > 0 ? '#4ade80' : '#f87171';
-            }
-
-            let html = '';
-            (pool.slots || []).forEach((slot) => {
-                if (slot.has_key) {
-                    const currentBadge = slot.is_current 
-                        ? '<span style="background: rgba(168, 85, 247, 0.3); color: #d8b4fe; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(168, 85, 247, 0.5);">ROTATION ACTIVE</span>' 
-                        : '';
-                    html += `
-                        <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 8px 12px; gap: 8px;">
-                            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                                <span style="background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.4); font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px;">Slot #${slot.slot}</span>
-                                <span style="font-family: monospace; font-size: 13px; color: #f8fafc; font-weight: 600;">${slot.masked_key}</span>
-                                ${currentBadge}
-                            </div>
-                            <div style="display: flex; gap: 6px;">
-                                <button type="button" onclick="replaceChannelKey(${slot.index})" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); color: #cbd5e1; border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer;">Replace</button>
-                                <button type="button" onclick="deleteChannelKey(${slot.index}, '${slot.masked_key}')" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer;">Delete</button>
-                            </div>
-                        </div>
-                    `;
-                } else {
-                    html += `
-                        <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.15); border: 1px dashed rgba(255,255,255,0.1); border-radius: 6px; padding: 7px 12px;">
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                <span style="background: rgba(255,255,255,0.05); color: #94a3b8; font-size: 11px; padding: 2px 6px; border-radius: 4px;">Slot #${slot.slot}</span>
-                                <span style="font-size: 12px; color: #64748b; font-style: italic;">Available Slot</span>
-                            </div>
-                            <button type="button" onclick="focusAddKeySlot(${slot.slot})" style="background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; border-radius: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer;">+ Add Key</button>
-                        </div>
-                    `;
-                }
-            });
-            keySlotsList.innerHTML = html;
-        }
-
-        function updatePoolNavStatus(pool) {
-            const hasKeys = pool && pool.total_active_keys > 0;
-            if (geminiDot) geminiDot.className = hasKeys ? 'status-dot active' : 'status-dot warning';
-            if (geminiStatusLabel) {
-                geminiStatusLabel.textContent = hasKeys 
-                    ? `Gemini Active (${pool.total_active_keys} Keys Pool)` 
-                    : 'Setup Gemini Key';
-            }
-            if (btnOpenKeyModal) {
-                btnOpenKeyModal.textContent = hasKeys 
-                    ? `⚙️ Pool: ${pool.total_active_keys} Keys` 
-                    : '⚙️ Configure API Key';
-            }
-        }
-
-        async function checkGeminiStatus() {
-            try {
-                const res = await fetch(`/api/gemini/status?channel_id=${encodeURIComponent(window.currentActiveChannelId || 'default')}`);
-                const data = await safeParseJson(res);
-                if (data.model && geminiModelSelect) {
-                    geminiModelSelect.value = data.model;
-                }
-                if (data.pool_status) {
-                    updatePoolNavStatus(data.pool_status);
-                } else if (data.has_key) {
-                    if (geminiDot) geminiDot.className = 'status-dot active';
-                    if (geminiStatusLabel) geminiStatusLabel.textContent = `Gemini Active (${data.masked_key})`;
-                    if (btnOpenKeyModal) btnOpenKeyModal.textContent = `⚙️ Key: ${data.masked_key}`;
-                } else {
-                    if (geminiDot) geminiDot.className = 'status-dot warning';
-                    if (geminiStatusLabel) geminiStatusLabel.textContent = 'Setup Gemini Key';
-                    if (btnOpenKeyModal) btnOpenKeyModal.textContent = '⚙️ Configure API Key';
-                }
-            } catch (err) {
-                console.error("Gemini status check failed", err);
-            }
-        }
-
-        if (geminiModelSelect) {
-            geminiModelSelect.addEventListener('change', async () => {
-                const newModel = geminiModelSelect.value;
-                const cleanChId = window.currentActiveChannelId || 'default';
-                try {
-                    await fetch('/api/gemini/config', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ channel_id: cleanChId, model: newModel })
-                    });
-                    showKeyStatus(`✔ Active Model updated to ${newModel}`, true);
-                } catch(e) {}
-            });
-        }
-
-        window.focusAddKeySlot = function(slotNum) {
-            if (geminiApiKeyInput) {
-                geminiApiKeyInput.focus();
-                geminiApiKeyInput.placeholder = `Enter API key for Slot #${slotNum}...`;
-            }
-        };
-
-        window.deleteChannelKey = async function(index, maskedKey) {
-            if (!confirm(`Are you sure you want to remove key (${maskedKey}) from Slot #${index + 1}?\n\nThis key will be permanently removed from this channel's pool.`)) {
-                return;
-            }
-            try {
-                const res = await fetch('/api/channel/gemini_keys/delete', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        channel_id: window.currentActiveChannelId || 'default',
-                        index: index
-                    })
-                });
-                const data = await safeParseJson(res);
-                if (data.success) {
-                    showKeyStatus(data.message || 'Key deleted successfully', true);
-                    loadChannelKeyPool(window.currentActiveChannelId);
-                } else {
-                    showKeyStatus(data.error || 'Failed to delete key', false);
-                }
-            } catch (e) {
-                showKeyStatus('Error deleting key: ' + e.message, false);
-            }
-        };
-
-        window.replaceChannelKey = async function(index) {
-            const newKey = prompt(`Enter new Gemini API key for Slot #${index + 1}:`);
-            if (!newKey || !newKey.trim()) return;
-            try {
-                showKeyStatus('Verifying & updating Slot #' + (index + 1) + '...', true);
-                const res = await fetch('/api/channel/gemini_keys/update', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        channel_id: window.currentActiveChannelId || 'default',
-                        index: index,
-                        api_key: newKey.trim()
-                    })
-                });
-                const data = await safeParseJson(res);
-                if (data.success) {
-                    showKeyStatus(data.message || 'Key updated successfully', true);
-                    loadChannelKeyPool(window.currentActiveChannelId);
-                } else {
-                    showKeyStatus(data.error || 'Failed to update key', false);
-                }
-            } catch (e) {
-                showKeyStatus('Error updating key: ' + e.message, false);
-            }
-        };
 
         function showKeyStatus(msg, isSuccess) {
             if (!geminiKeyStatusMsg) return;
@@ -3093,21 +2887,51 @@ HTML_MAIN = """
             geminiKeyStatusMsg.textContent = msg;
         }
 
+        async function checkGeminiStatus() {
+            try {
+                const res = await fetch(`/api/gemini/status?channel_id=${encodeURIComponent(window.currentActiveChannelId || 'default')}`);
+                const data = await safeParseJson(res);
+                if (data.is_configured && data.has_key) {
+                    if (geminiDot) geminiDot.className = 'status-dot active';
+                    if (geminiStatusLabel) geminiStatusLabel.textContent = `Gemini Active (${data.masked_key})`;
+                    if (btnOpenKeyModal) btnOpenKeyModal.textContent = `⚙️ Key: ${data.masked_key}`;
+                    if (geminiEngineStatusBadge) {
+                        geminiEngineStatusBadge.textContent = `🟢 Active (${data.model || 'Auto-Routing'})`;
+                        geminiEngineStatusBadge.style.background = 'rgba(34, 197, 94, 0.2)';
+                        geminiEngineStatusBadge.style.color = '#4ade80';
+                    }
+                    if (geminiApiKeyInput && !geminiApiKeyInput.value) {
+                        geminiApiKeyInput.placeholder = `Active Key: ${data.masked_key}`;
+                    }
+                } else {
+                    if (geminiDot) geminiDot.className = 'status-dot warning';
+                    if (geminiStatusLabel) geminiStatusLabel.textContent = 'Setup Gemini Key';
+                    if (btnOpenKeyModal) btnOpenKeyModal.textContent = '⚙️ Configure API Key';
+                    if (geminiEngineStatusBadge) {
+                        geminiEngineStatusBadge.textContent = 'Key Required';
+                        geminiEngineStatusBadge.style.background = 'rgba(239, 68, 68, 0.2)';
+                        geminiEngineStatusBadge.style.color = '#f87171';
+                    }
+                }
+            } catch (err) {
+                console.error("Gemini status check failed", err);
+            }
+        }
+
         if (btnSaveGeminiKey) {
             btnSaveGeminiKey.addEventListener('click', async () => {
                 const key = geminiApiKeyInput.value.trim();
-                const model = geminiModelSelect.value;
                 if (!key) {
-                    alert("Please enter a valid Gemini API key!");
+                    alert("Please enter your Gemini API key!");
                     return;
                 }
                 btnSaveGeminiKey.disabled = true;
-                btnSaveGeminiKey.innerHTML = '<span class="spinner" style="width: 14px; height: 14px;"></span> Verifying...';
+                btnSaveGeminiKey.innerHTML = '<span class="spinner" style="width: 14px; height: 14px;"></span> Validating...';
                 if (geminiKeyStatusMsg) geminiKeyStatusMsg.style.display = 'none';
 
                 try {
                     const cleanChId = window.currentActiveChannelId || 'default';
-                    const res = await fetch('/api/channel/gemini_keys/add', {
+                    const res = await fetch('/api/gemini/config', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
@@ -3117,69 +2941,26 @@ HTML_MAIN = """
                     });
                     const data = await safeParseJson(res);
                     if (data.success) {
-                        showKeyStatus(`✔ ${data.message || 'Key saved to pool successfully!'}`, true);
+                        showKeyStatus(`✔ ${data.message || 'Key connected and validated successfully!'}`, true);
                         geminiApiKeyInput.value = '';
-                        geminiApiKeyInput.placeholder = 'Enter Gemini API key (AIzaSy...)';
-                        // Also sync active model config
-                        fetch('/api/gemini/config', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ channel_id: cleanChId, api_key: key, model: model })
-                        }).catch(() => {});
-
-                        // Cache raw key to client localStorage array for cold disaster recovery
-                        try {
-                            const storeKey = 'gemini_local_backup_' + cleanChId;
-                            const existingLocal = JSON.parse(localStorage.getItem(storeKey) || '[]');
-                            if (!existingLocal.includes(key)) {
-                                existingLocal.push(key);
-                                localStorage.setItem(storeKey, JSON.stringify(existingLocal.slice(-10)));
-                            }
-                        } catch(e) {}
-
                         setTimeout(() => {
-                            loadChannelKeyPool(cleanChId);
                             checkGeminiStatus();
                             btnSaveGeminiKey.disabled = false;
-                            btnSaveGeminiKey.innerHTML = '<span>+ Add to Pool</span>';
+                            btnSaveGeminiKey.innerHTML = '<span>⚡ Connect &amp; Validate</span>';
                         }, 500);
                     } else {
-                        showKeyStatus('Error: ' + (data.error || data.message || 'Failed to verify key'), false);
+                        showKeyStatus('Error: ' + (data.error || 'Failed to validate API key'), false);
                         btnSaveGeminiKey.disabled = false;
-                        btnSaveGeminiKey.innerHTML = '<span>+ Add to Pool</span>';
+                        btnSaveGeminiKey.innerHTML = '<span>⚡ Connect &amp; Validate</span>';
                     }
                 } catch (err) {
                     showKeyStatus('Network error saving key: ' + err.message, false);
                     btnSaveGeminiKey.disabled = false;
-                    btnSaveGeminiKey.innerHTML = '<span>+ Add to Pool</span>';
+                    btnSaveGeminiKey.innerHTML = '<span>⚡ Connect &amp; Validate</span>';
                 }
             });
         }
 
-        async function tryAutoSyncFromLocal(cleanId) {
-            try {
-                const storeKey = 'gemini_local_backup_' + cleanId;
-                const cachedRawKeys = JSON.parse(localStorage.getItem(storeKey) || '[]');
-                if (Array.isArray(cachedRawKeys) && cachedRawKeys.length > 0) {
-                    console.info(`Cold reboot detected: Auto-syncing ${cachedRawKeys.length} cached keys for channel ${cleanId}`);
-                    const syncRes = await fetch('/api/channel/gemini_keys/sync', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            channel_id: cleanId,
-                            keys: cachedRawKeys
-                        })
-                    });
-                    const syncData = await safeParseJson(syncRes);
-                    if (syncData.success && syncData.pool) {
-                        renderKeyPoolSlots(syncData.pool);
-                        updatePoolNavStatus(syncData.pool);
-                    }
-                }
-            } catch (e) {
-                console.warn("Auto-sync from local notice:", e);
-            }
-        }
 
         // Video Target Format State & Switcher
         let currentSelectedFormat = 'Short';
@@ -5040,80 +4821,6 @@ def gemini_save_config():
     ch_id = (data.get('channel_id') or '').strip() or get_active_channel_id_or_default()
     res = gemini_engine.save_gemini_config(api_key, model, channel_id=ch_id)
     return jsonify(res)
-
-@app.route('/api/channel/gemini_keys', methods=['GET'])
-def get_channel_gemini_keys():
-    try:
-        ch_id = request.args.get('channel_id') or get_active_channel_id_or_default()
-        pool_status = channel_key_store.get_channel_key_pool_status(ch_id)
-        return jsonify({'success': True, 'channel_id': ch_id, 'pool': pool_status})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/channel/gemini_keys/add', methods=['POST'])
-def add_channel_gemini_key():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        ch_id = (data.get('channel_id') or '').strip() or get_active_channel_id_or_default()
-        new_key = (data.get('api_key') or '').strip()
-        verify = data.get('verify', True)
-        if not new_key:
-            return jsonify({'success': False, 'error': 'API key cannot be empty'}), 400
-        ok, msg = channel_key_store.add_channel_key(ch_id, new_key, verify=verify)
-        pool_status = channel_key_store.get_channel_key_pool_status(ch_id)
-        return jsonify({'success': ok, 'message': msg, 'channel_id': ch_id, 'pool': pool_status})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/channel/gemini_keys/delete', methods=['POST'])
-def delete_channel_gemini_key():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        ch_id = (data.get('channel_id') or '').strip() or get_active_channel_id_or_default()
-        index = int(data.get('index', -1))
-        if index < 0 or index >= 10:
-            return jsonify({'success': False, 'error': 'Invalid key slot index'}), 400
-        ok, msg = channel_key_store.remove_channel_key(ch_id, index)
-        pool_status = channel_key_store.get_channel_key_pool_status(ch_id)
-        return jsonify({'success': ok, 'message': msg, 'channel_id': ch_id, 'pool': pool_status})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/channel/gemini_keys/update', methods=['POST'])
-def update_channel_gemini_key():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        ch_id = (data.get('channel_id') or '').strip() or get_active_channel_id_or_default()
-        index = int(data.get('index', -1))
-        new_key = (data.get('api_key') or '').strip()
-        verify = data.get('verify', True)
-        if index < 0 or index >= 10:
-            return jsonify({'success': False, 'error': 'Invalid key slot index'}), 400
-        if not new_key:
-            return jsonify({'success': False, 'error': 'New API key cannot be empty'}), 400
-        ok, msg = channel_key_store.update_channel_key(ch_id, index, new_key, verify=verify)
-        pool_status = channel_key_store.get_channel_key_pool_status(ch_id)
-        return jsonify({'success': ok, 'message': msg, 'channel_id': ch_id, 'pool': pool_status})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/channel/gemini_keys/sync', methods=['POST'])
-def sync_channel_gemini_keys():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        ch_id = (data.get('channel_id') or '').strip() or get_active_channel_id_or_default()
-        client_keys = data.get('keys', [])
-        if isinstance(client_keys, list) and client_keys:
-            existing_keys = channel_key_store.get_channel_keys(ch_id)
-            merged = list(existing_keys)
-            for k in client_keys:
-                if isinstance(k, str) and k.strip() and k.strip() not in merged and len(merged) < 10:
-                    merged.append(k.strip())
-            channel_key_store.save_channel_keys_to_db(ch_id, merged, mirror_backup=True)
-        pool_status = channel_key_store.get_channel_key_pool_status(ch_id)
-        return jsonify({'success': True, 'channel_id': ch_id, 'pool': pool_status})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/gemini/analyze', methods=['POST'])
 def gemini_analyze():
