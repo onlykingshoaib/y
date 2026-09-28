@@ -14,37 +14,51 @@ GEMINI_CONFIG_FILE = os.path.join(BASE_DIR, "gemini_config.json")
 THUMBNAILS_DIR = os.path.join(BASE_DIR, "uploads", "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 
-# Production Gemini Multimodal Models (Audio + Video + Search Grounding)
-DEFAULT_MODEL = "gemini-2.5-flash"
+# Production Gemini Multimodal Models (2026 Cutting-Edge Production Models)
+DEFAULT_MODEL = "gemini-3.8-flash"
 FALLBACK_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-2.0-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
     "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-pro-latest",
+    "gemini-3.1-pro-preview",
 ]
 
-# Nano Banana / Imagen 4K Thumbnail Generation Models
+# Nano Banana 4K Thumbnail Generation Models (Direct Multimodal Image)
 NANO_BANANA_IMAGE_MODELS = [
-    "gemini-3.1-flash-image-preview",
     "gemini-3.1-flash-image",
-    "gemini-3-pro-image-preview",
+    "gemini-3.1-flash-image-preview",
     "gemini-3-pro-image",
-    "gemini-2.5-flash-image",
+    "gemini-3-pro-image-preview",
     "gemini-3.1-flash-lite-image",
-    "gemini-2.0-flash-exp-image-generation",
 ]
 
 
 def _normalize_model_name(model_name: str) -> str:
-    """Normalizes legacy/non-existent model aliases to active production Gemini models."""
+    """Normalizes legacy or deprecated models to active 2026 cutting-edge production Gemini models."""
     m = (model_name or "").strip()
-    if not m or m in ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"):
+    if not m:
         return DEFAULT_MODEL
-    return m
+    if m.startswith("models/"):
+        m = m[7:]
+
+    # Map deprecated / older models to the newest equivalent versions
+    legacy_replacements = {
+        "gemini-2.5-flash": "gemini-3.8-flash",
+        "gemini-2.5-pro": "gemini-3.7-flash",
+        "gemini-2.0-flash": "gemini-3.6-flash",
+        "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
+        "gemini-1.5-flash": "gemini-flash-latest",
+        "gemini-1.5-pro": "gemini-pro-latest",
+        "gemini-1.0-pro": "gemini-3.8-flash",
+        "gemini-2.0-flash-exp": "gemini-3.6-flash",
+    }
+    return legacy_replacements.get(m, m)
 
 
 def get_gemini_config(channel_id: Optional[str] = None) -> Dict[str, Any]:
@@ -92,12 +106,22 @@ def get_gemini_config(channel_id: Optional[str] = None) -> Dict[str, Any]:
     return config
 
 
-def save_gemini_config(api_key: str, model: str = DEFAULT_MODEL, channel_id: Optional[str] = None) -> Dict[str, Any]:
+def save_gemini_config(api_key: str = "", model: str = DEFAULT_MODEL, channel_id: Optional[str] = None) -> Dict[str, Any]:
     """Saves Gemini API key and model selection to local file and channel key pool."""
-    clean_key = api_key.strip()
+    clean_key = (api_key or "").strip()
     norm_model = _normalize_model_name(model)
+    existing_key = ""
+    if os.path.exists(GEMINI_CONFIG_FILE):
+        try:
+            with open(GEMINI_CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                existing_key = (saved.get("api_key") or "").strip()
+        except Exception:
+            pass
+
+    final_key = clean_key or existing_key
     data = {
-        "api_key": clean_key,
+        "api_key": final_key,
         "model": norm_model,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
@@ -110,7 +134,8 @@ def save_gemini_config(api_key: str, model: str = DEFAULT_MODEL, channel_id: Opt
         except Exception as e:
             print(f"Notice adding key to channel_key_store: {e}")
 
-    os.environ["GEMINI_API_KEY"] = data["api_key"]
+    if data["api_key"]:
+        os.environ["GEMINI_API_KEY"] = data["api_key"]
     return {
         "success": True,
         "model": data["model"],
@@ -1102,54 +1127,32 @@ def generate_dynamic_ai_thumbnail(
         from google.genai import types
 
         def _try_nano_banana_or_imagen(client):
-            # Try official Imagen models first with quick single attempt
-            for imagen_model in ["imagen-3.0-generate-002", "imagen-3.0-fast-generate-001"]:
+            contents_payload = []
+            if face_ref_pil is not None:
+                contents_payload.append(face_ref_pil)
+            contents_payload.append(nano_banana_prompt)
+
+            # Direct multimodal image generation via Gemini 3.x image models
+            for img_model in NANO_BANANA_IMAGE_MODELS:
                 try:
-                    img_resp = client.models.generate_images(
-                        model=imagen_model,
-                        prompt=nano_banana_prompt,
-                        config=types.GenerateImagesConfig(
-                            number_of_images=1,
-                            aspect_ratio=aspect_ratio,
-                            output_mime_type="image/jpeg"
-                        )
+                    resp = client.models.generate_content(
+                        model=img_model,
+                        contents=contents_payload,
+                        config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
                     )
-                    gen_imgs = getattr(img_resp, "generated_images", None) or []
-                    if gen_imgs:
-                        img_obj = getattr(gen_imgs[0], "image", None)
-                        img_bytes = getattr(img_obj, "image_bytes", None)
-                        if img_bytes:
-                            arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                            decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                            if decoded is not None and decoded.size > 0:
-                                return (decoded, imagen_model)
+                    if resp and getattr(resp, "candidates", None):
+                        for cand in resp.candidates:
+                            content = getattr(cand, "content", None)
+                            for part in (getattr(content, "parts", None) or []):
+                                inline = getattr(part, "inline_data", None)
+                                if inline and getattr(inline, "data", None):
+                                    img_bytes = inline.data
+                                    arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                                    decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                                    if decoded is not None and decoded.size > 0:
+                                        return (decoded, img_model)
                 except Exception:
                     continue
-
-            # Quick attempt with gemini-2.5-flash-image if available
-            try:
-                contents_payload = []
-                if face_ref_pil is not None:
-                    contents_payload.append(face_ref_pil)
-                contents_payload.append(nano_banana_prompt)
-                resp = client.models.generate_content(
-                    model="gemini-2.5-flash-image",
-                    contents=contents_payload,
-                    config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
-                )
-                if resp and getattr(resp, "candidates", None):
-                    for cand in resp.candidates:
-                        content = getattr(cand, "content", None)
-                        for part in (getattr(content, "parts", None) or []):
-                            inline = getattr(part, "inline_data", None)
-                            if inline and getattr(inline, "data", None):
-                                img_bytes = inline.data
-                                arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                                decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                                if decoded is not None and decoded.size > 0:
-                                    return (decoded, "gemini-2.5-flash-image")
-            except Exception:
-                pass
 
             return (None, None)
 

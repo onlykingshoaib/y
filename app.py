@@ -2701,9 +2701,13 @@ HTML_MAIN = """
                 <div style="display: flex; gap: 10px; align-items: center;">
                     <div style="font-size: 11px; color: #94a3b8;">Active Model:</div>
                     <select id="geminiModelSelect" style="flex: 1; padding: 6px 10px; font-size: 12px; margin-bottom: 0;">
-                        <option value="gemini-2.5-flash" selected>gemini-2.5-flash (Recommended &bull; Dual-Track + 4K Nano Banana)</option>
-                        <option value="gemini-2.5-pro">gemini-2.5-pro (Deepest Story &amp; Dialogue Reasoning)</option>
-                        <option value="gemini-2.0-flash">gemini-2.0-flash (High-Speed Multimodal)</option>
+                        <option value="gemini-3.8-flash" selected>⚡ gemini-3.8-flash (Latest 2026 Flagship &bull; Dual-Track Ingestion)</option>
+                        <option value="gemini-3.7-flash">🧠 gemini-3.7-flash (Hybrid Reasoning &amp; Deep Plot Analysis)</option>
+                        <option value="gemini-3.6-flash">🚀 gemini-3.6-flash (Ultra-Fast 1.5s High-Speed)</option>
+                        <option value="gemini-3.5-flash-lite">⚡ gemini-3.5-flash-lite (Instant 0.7s Low-Latency)</option>
+                        <option value="gemini-flash-latest">🔄 gemini-flash-latest (Auto-Updating Google Flash)</option>
+                        <option value="gemini-flash-lite-latest">🔄 gemini-flash-lite-latest (Auto-Updating Google Lite)</option>
+                        <option value="gemini-pro-latest">👑 gemini-pro-latest (Elite Screenplay &amp; Metadata Architecture)</option>
                     </select>
                 </div>
             </div>
@@ -2988,6 +2992,9 @@ HTML_MAIN = """
             try {
                 const res = await fetch(`/api/gemini/status?channel_id=${encodeURIComponent(window.currentActiveChannelId || 'default')}`);
                 const data = await safeParseJson(res);
+                if (data.model && geminiModelSelect) {
+                    geminiModelSelect.value = data.model;
+                }
                 if (data.pool_status) {
                     updatePoolNavStatus(data.pool_status);
                 } else if (data.has_key) {
@@ -3002,6 +3009,21 @@ HTML_MAIN = """
             } catch (err) {
                 console.error("Gemini status check failed", err);
             }
+        }
+
+        if (geminiModelSelect) {
+            geminiModelSelect.addEventListener('change', async () => {
+                const newModel = geminiModelSelect.value;
+                const cleanChId = window.currentActiveChannelId || 'default';
+                try {
+                    await fetch('/api/gemini/config', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ channel_id: cleanChId, model: newModel })
+                    });
+                    showKeyStatus(`✔ Active Model updated to ${newModel}`, true);
+                } catch(e) {}
+            });
         }
 
         window.focusAddKeySlot = function(slotNum) {
@@ -3117,6 +3139,7 @@ HTML_MAIN = """
 
                         setTimeout(() => {
                             loadChannelKeyPool(cleanChId);
+                            checkGeminiStatus();
                             btnSaveGeminiKey.disabled = false;
                             btnSaveGeminiKey.innerHTML = '<span>+ Add to Pool</span>';
                         }, 500);
@@ -5012,11 +5035,9 @@ def gemini_status():
 @app.route('/api/gemini/config', methods=['POST'])
 def gemini_save_config():
     data = request.get_json(force=True, silent=True) or {}
-    api_key = data.get('api_key', '').strip()
-    model = data.get('model', 'gemini-3.8-flash').strip()
+    api_key = (data.get('api_key') or '').strip()
+    model = (data.get('model') or gemini_engine.DEFAULT_MODEL).strip()
     ch_id = (data.get('channel_id') or '').strip() or get_active_channel_id_or_default()
-    if not api_key:
-        return jsonify({'error': 'API key is required'}), 400
     res = gemini_engine.save_gemini_config(api_key, model, channel_id=ch_id)
     return jsonify(res)
 
