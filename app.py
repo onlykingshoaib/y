@@ -2725,6 +2725,35 @@ HTML_MAIN = """
         let tempVideoServerFilename = null;
         let clientExtractedFrames = [];
 
+        // Safe JSON parsing helper to completely prevent 'Unexpected end of JSON input'
+        window.safeParseJson = safeParseJson;
+        async function safeParseJson(res) {
+            let text = "";
+            try {
+                text = await res.text();
+            } catch (e) {
+                text = "";
+            }
+            let data = null;
+            if (text && text.trim()) {
+                try {
+                    data = JSON.parse(text);
+                } catch (parseErr) {
+                    data = { error: `Server returned non-JSON (HTTP ${res.status}): ${text.substring(0, 150)}` };
+                }
+            } else {
+                data = { error: `Server returned empty response (HTTP ${res.status}).` };
+            }
+            if (!res.ok) {
+                const msg = (data && data.error) ? data.error : `Request failed with HTTP status ${res.status}`;
+                const err = new Error(msg);
+                err.status = res.status;
+                err.data = data;
+                throw err;
+            }
+            return data;
+        }
+
         // Registry of detached modal elements so they can be hard-removed from root DOM when closed
         window._detachedModals = window._detachedModals || {};
 
@@ -2884,7 +2913,7 @@ HTML_MAIN = """
             }
             try {
                 const res = await fetch(`/api/channel/gemini_keys?channel_id=${encodeURIComponent(cleanId)}`);
-                const data = await res.json();
+                const data = await safeParseJson(res);
                 if (data.success && data.pool) {
                     renderKeyPoolSlots(data.pool);
                     updatePoolNavStatus(data.pool);
@@ -2958,7 +2987,7 @@ HTML_MAIN = """
         async function checkGeminiStatus() {
             try {
                 const res = await fetch(`/api/gemini/status?channel_id=${encodeURIComponent(window.currentActiveChannelId || 'default')}`);
-                const data = await res.json();
+                const data = await safeParseJson(res);
                 if (data.pool_status) {
                     updatePoolNavStatus(data.pool_status);
                 } else if (data.has_key) {
@@ -2995,7 +3024,7 @@ HTML_MAIN = """
                         index: index
                     })
                 });
-                const data = await res.json();
+                const data = await safeParseJson(res);
                 if (data.success) {
                     showKeyStatus(data.message || 'Key deleted successfully', true);
                     loadChannelKeyPool(window.currentActiveChannelId);
@@ -3021,7 +3050,7 @@ HTML_MAIN = """
                         api_key: newKey.trim()
                     })
                 });
-                const data = await res.json();
+                const data = await safeParseJson(res);
                 if (data.success) {
                     showKeyStatus(data.message || 'Key updated successfully', true);
                     loadChannelKeyPool(window.currentActiveChannelId);
@@ -3064,7 +3093,7 @@ HTML_MAIN = """
                             api_key: key
                         })
                     });
-                    const data = await res.json();
+                    const data = await safeParseJson(res);
                     if (data.success) {
                         showKeyStatus(`✔ ${data.message || 'Key saved to pool successfully!'}`, true);
                         geminiApiKeyInput.value = '';
@@ -3118,7 +3147,7 @@ HTML_MAIN = """
                             keys: cachedRawKeys
                         })
                     });
-                    const syncData = await syncRes.json();
+                    const syncData = await safeParseJson(syncRes);
                     if (syncData.success && syncData.pool) {
                         renderKeyPoolSlots(syncData.pool);
                         updatePoolNavStatus(syncData.pool);
@@ -3248,7 +3277,7 @@ HTML_MAIN = """
                     fd.append('aspect_ratio', targetAspect);
 
                     const res = await fetch('/api/save_thumbnail_frame', { method: 'POST', body: fd });
-                    const frameData = await res.json();
+                    const frameData = await safeParseJson(res);
                     clientExtractedFrames.push(frameData);
                 } catch (e) {
                     console.error("Frame save error", e);
@@ -3479,15 +3508,11 @@ HTML_MAIN = """
                         body: formData
                     });
 
-                    if (!res.ok) {
-                        const errData = await res.json();
-                        throw new Error(errData.error || "Analysis failed");
-                    }
+                    const metadata = await safeParseJson(res);
 
                     setStepCompleted('step4');
                     setStepActive('step5');
 
-                    const metadata = await res.json();
                     currentGeminiData = metadata;
                     tempVideoServerFilename = metadata.video_filename;
                     document.getElementById('existingVideoFilename').value = tempVideoServerFilename;
@@ -3862,7 +3887,7 @@ HTML_MAIN = """
                         }
                     })
                 });
-                const data = await res.json();
+                const data = await safeParseJson(res);
                 
                 aiMsg.innerHTML = escapeHtml(data.reply).replace(/\\n/g, '<br>');
 
@@ -4157,11 +4182,7 @@ HTML_MAIN = """
                 } catch(e) {}
 
                 const res = await fetch('/api/channel');
-                if (!res.ok) {
-                    console.warn("Failed to load channel details:", res.status);
-                    return;
-                }
-                const data = await res.json();
+                const data = await safeParseJson(res);
                 if (data && data.id && data.id !== 'no_channel') {
                     window.currentActiveChannelId = data.id;
                     window.currentActiveChannelTitle = data.title || 'YouTube Creator';
@@ -4230,8 +4251,8 @@ HTML_MAIN = """
             const grid = document.getElementById('recentVideosGrid');
             try {
                 const res = await fetch('/api/recent_videos');
-                const videos = await res.json();
-                if (!videos || videos.length === 0) {
+                const videos = await safeParseJson(res);
+                if (!videos || !Array.isArray(videos) || videos.length === 0) {
                     grid.innerHTML = '<div style="color: var(--text-muted); font-size: 13px;">No recent videos found.</div>';
                     return;
                 }
@@ -4332,7 +4353,7 @@ HTML_MAIN = """
             const interval = setInterval(async () => {
                 try {
                     const res = await fetch(`/api/upload_status/${taskId}`);
-                    const data = await res.json();
+                    const data = await safeParseJson(res);
                     
                     if (data.status === 'uploading') {
                         const ytPercent = Math.round(45 + (data.progress * 50));
