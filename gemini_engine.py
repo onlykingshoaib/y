@@ -648,8 +648,63 @@ def _resolve_genre_dramatic_preset(
         }
 
     if any(w in combined for w in [
+        "game", "gaming", "esports", "pubg", "bgmi", "free fire", "gta", "cod",
+        "warzone", "fps", "streamer", "gameplay", "killfeed", "clutch", "headshot"
+    ]):
+        return {
+            "genre_category": "Gaming/Action",
+            "mode": "gaming_action",
+            "prompt_style": (
+                "GAMING / ESPORTS 4K HIGH-OCTANE THUMBNAIL GRADE: Transform the scene into an ultra-electrifying "
+                "gaming masterpiece. Feature dynamic in-game combat perspective or player reaction, highlighted with "
+                "vibrant neon cyan and laser-magenta edge highlights, intense motion blur, crisp particle sparks, "
+                "stylized HUD elements, and high-impact cinematic esports lighting."
+            ),
+            "shadow_bgr": (30, 10, 20),      # Dark cyberpunk indigo
+            "highlight_bgr": (255, 230, 0),  # Electric cyan-yellow
+            "glow_rgb": (0, 240, 255),       # Neon cyan glow
+            "text_rgb": (255, 255, 0),       # High-visibility esports yellow
+            "badge_rgb": (236, 72, 153)
+        }
+
+    if any(w in combined for w in [
+        "tech", "technology", "ai", "science", "coding", "software", "gadget", "cyber", "hardware", "future"
+    ]):
+        return {
+            "genre_category": "Science/Technology",
+            "mode": "tech_modern",
+            "prompt_style": (
+                "TECH / SCI-FI 4K MODERN GRADE: Clean, futuristic studio composition with sleek holographic accents, "
+                "minimalist deep metallic textures, cool blue and sharp white rim lighting, and premium high-contrast "
+                "depth of field focusing on innovation and discovery."
+            ),
+            "shadow_bgr": (25, 20, 15),
+            "highlight_bgr": (240, 200, 30),
+            "glow_rgb": (38, 166, 254),
+            "text_rgb": (255, 255, 255),
+            "badge_rgb": (59, 130, 246)
+        }
+
+    if any(w in combined for w in [
+        "vlog", "travel", "lifestyle", "daily", "routine", "trip", "food", "tour"
+    ]):
+        return {
+            "genre_category": "Vlog/Lifestyle",
+            "mode": "lifestyle_vlog",
+            "prompt_style": (
+                "LIFESTYLE / VLOG 4K VIRAL GRADE: High-energy, warm, authentic creator framing with punchy saturated colors, "
+                "golden-hour cinematic backlighting, expressive subject focus, and crisp, clean depth of field."
+            ),
+            "shadow_bgr": (35, 20, 45),
+            "highlight_bgr": (40, 210, 255),
+            "glow_rgb": (255, 180, 20),
+            "text_rgb": (255, 255, 255),
+            "badge_rgb": (249, 115, 22)
+        }
+
+    if any(w in combined for w in [
         "comedy", "funny", "humor", "prank", "joke", "laugh", "drama", "emotional",
-        "family", "romance", "reaction", "fun", "roast", "entertainment", "challenge", "vlog"
+        "family", "romance", "reaction", "fun", "roast", "entertainment", "challenge"
     ]):
         return {
             "genre_category": "Comedy/Drama",
@@ -1409,12 +1464,18 @@ def map_genre_to_youtube_category(genre: Optional[str] = "", current_category_id
         return ("28", "Science & Technology")
     elif any(k in g for k in ["education", "learn", "explainer", "tutorial", "lesson", "how to"]):
         return ("27", "Education")
-    elif current_category_id and str(current_category_id) in ["1", "24", "23", "20", "27", "28"]:
+    elif any(k in g for k in ["vlog", "lifestyle", "travel", "routine", "people", "daily", "family", "blog"]):
+        return ("22", "People & Blogs")
+    elif any(k in g for k in ["howto", "style", "recipe", "cooking", "craft", "fashion", "makeup"]):
+        return ("26", "Howto & Style")
+    elif current_category_id and str(current_category_id) in ["1", "24", "23", "20", "22", "26", "27", "28"]:
         cat_names = {
             "1": "Film & Animation",
             "24": "Entertainment",
             "23": "Comedy",
             "20": "Gaming",
+            "22": "People & Blogs",
+            "26": "Howto & Style",
             "27": "Education",
             "28": "Science & Technology"
         }
@@ -1587,7 +1648,7 @@ def analyze_youtube_video_with_gemini(
         raise ValueError(f"Invalid YouTube URL or Video ID: '{video_id_or_url}'")
 
     cache_key = f"{video_id}_{format_type}"
-    if not force_refresh and cache_key in ANALYSIS_CACHE and video_id != "b2pOeMtMF5Y":
+    if not force_refresh and cache_key in ANALYSIS_CACHE:
         entry = ANALYSIS_CACHE[cache_key]
         if time.time() - entry.get("timestamp", 0) < 7200:
             cached_data = dict(entry["data"])
@@ -1925,29 +1986,6 @@ Return STRICT JSON ONLY with these EXACT keys:
             "summary_insights": f"Pre-processed YouTube Video {video_id} analyzed. Ready for 1-click publishing."
         }
 
-    # Story-Accurate Character & Narrative Context for video b2pOeMtMF5Y or John Bravo
-    if video_id == "b2pOeMtMF5Y" or "john bravo" in str(metadata.get("title", "")).lower() or "john bravo" in str(yt_title).lower():
-        metadata["title"] = "John Bravo: The Most Dangerous Mafia Boss Revealed | Climax Explained"
-        metadata["viral_title"] = "John Bravo: The Most Dangerous Mafia Boss Revealed | Climax Explained"
-        metadata["category_id"] = "1"
-        metadata["category_name"] = "Film & Animation"
-        metadata["tags"] = ["John Bravo", "Movie Scene Breakdown", "Suspense Thriller", "South Movie Climax", "Story Explained"]
-        metadata["search_tags"] = ["John Bravo", "Movie Scene Breakdown", "Suspense Thriller", "South Movie Climax", "Story Explained"]
-        metadata["hashtags"] = ["#JohnBravo", "#MovieSceneBreakdown", "#SuspenseThriller", "#StoryExplained"]
-        metadata["detected_genre"] = "Film & Animation / Suspense Thriller"
-        metadata["detected_genre_emotion"] = "Film & Animation • High Suspense Crime Thriller"
-        metadata["primary_context"] = "John Bravo Mafia Boss"
-        metadata["climactic_context"] = "The international arms dealer and mafia mastermind deadly climax"
-        metadata["thumbnail_directive"] = {
-            "text_overlay": "JOHN BRAVO",
-            "visual_scene_direction": "Intense mafia boss face with dramatic chiaroscuro backlighting, direct eye contact, and cinematic sparks",
-            "recommended_color_theme": "Fiery amber and deep high-contrast noir lighting"
-        }
-        metadata["thumbnail_concept"] = "4K cinematic movie poster featuring John Bravo with intense facial expression, dramatic chiaroscuro backlighting, and flying cinematic sparks."
-        metadata["thumbnail_prompt"] = "Synthesize an authentic 4K cinematic movie poster of John Bravo, intense mafia boss, dramatic backlighting, cinematic sparks, chiaroscuro shadows, razor-sharp eye contact, high-stakes crime thriller atmosphere."
-        if not metadata.get("description") or len(metadata.get("description", "")) < 40 or "john bravo" not in metadata.get("description", "").lower():
-            metadata["description"] = "The thrilling story of John Bravo, the international arms dealer and mafia mastermind, and his deadly encounter. Watch the complete climax explained.\n\n#JohnBravo #MovieSceneBreakdown #SuspenseThriller #StoryExplained"
-
     # 6. Generate SLOT 1 (DEFAULT SELECTED) 4K Nano Banana Movie Poster Thumbnail (Optional Stage)
     slot_1_ai_thumb = None
     thumb_error = None
@@ -1978,12 +2016,6 @@ Return STRICT JSON ONLY with these EXACT keys:
             norm_title = truncated.rsplit(" ", 1)[0].strip()
         else:
             norm_title = truncated.strip()
-
-    # Enforce b2pOeMtMF5Y exact required specs
-    if video_id == "b2pOeMtMF5Y" or "john bravo" in norm_title.lower() or "john bravo" in str(yt_title).lower():
-        norm_title = "John Bravo: The Most Dangerous Mafia Boss Revealed | Climax Explained"
-        cat_id = "1"
-        cat_name = "Film & Animation"
 
     # Ensure alternative titles stay strictly under 70 characters
     if "alternative_titles" in metadata and isinstance(metadata["alternative_titles"], list):
