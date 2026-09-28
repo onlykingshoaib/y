@@ -112,6 +112,39 @@ def save_accounts_store(data: dict):
     except Exception as e:
         print(f"Error saving accounts store: {e}")
 
+PIPELINE_STORE_FILE = os.path.join(UPLOAD_FOLDER, "pipeline_records.json")
+
+def load_pipeline_store() -> dict:
+    if os.path.exists(PIPELINE_STORE_FILE):
+        try:
+            with open(PIPELINE_STORE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading pipeline store: {e}")
+    return {}
+
+def save_pipeline_store(data: dict):
+    try:
+        with open(PIPELINE_STORE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Error saving pipeline store: {e}")
+
+def get_pipeline_record(video_id: str) -> dict:
+    store = load_pipeline_store()
+    return store.get(video_id, {})
+
+def save_pipeline_record(video_id: str, updates: dict) -> dict:
+    store = load_pipeline_store()
+    record = store.get(video_id, {})
+    record.update(updates)
+    record["video_id"] = video_id
+    record["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    store[video_id] = record
+    save_pipeline_store(store)
+    return record
+
+
 def save_user_account(email: str, creds_dict: dict, channels: list, active_channel_id: str = None) -> str:
     accounts = load_accounts_store()
     account_key = email.lower().strip() if email else (active_channel_id or "default")
@@ -2182,9 +2215,12 @@ HTML_MAIN = """
                         <!-- URL Input & Button -->
                         <div style="display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;">
                             <input type="text" id="ytOptimizeUrlInput" placeholder="Paste YouTube Video URL or ID (e.g. https://youtu.be/xyz or 9psiSgSoZoc)..." style="flex: 1; min-width: 260px; padding: 12px 14px; font-size: 14px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 8px; color: white;">
-                            <button type="button" id="btnRunYtOptimization" class="btn-ai-analyze" style="width: auto; padding: 0 22px; margin-top: 0; white-space: nowrap;">
+                            <button type="button" id="btnRunYtOptimization" class="btn-ai-analyze" style="width: auto; padding: 0 20px; margin-top: 0; white-space: nowrap;">
                                 <svg style="width: 18px; height: 18px; fill: white;" viewBox="0 0 24 24"><path d="M12 2l2.4 7.4h7.6l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4-6.2-4.5h7.6z"/></svg>
-                                <span>⚡ Ingest &amp; Generate 4K Poster (&lt; 30s)</span>
+                                <span>⚡ Analyze &amp; Optimize</span>
+                            </button>
+                            <button type="button" id="btnReAnalyzeYtVideo" class="btn-populate" style="width: auto; padding: 0 16px; margin-top: 0; white-space: nowrap; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.2); color: #cbd5e1;" title="Force fresh analysis without cache">
+                                <span>🔄 Re-Analyze</span>
                             </button>
                         </div>
 
@@ -2332,6 +2368,21 @@ HTML_MAIN = """
                         <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">
                             <strong>Slot 1 (Default Selected)</strong> extracts the highest-emotion character face from your video, preserves <strong>100% character facial identity</strong>, and applies genre-specific 4K poster rendering (War/Heroic explosions &amp; smoke, Horror/Thriller shadows, or Comedy/Drama vibrant pop). <strong>Slots 2 to 6</strong> are 5 native high-emotion keyframes.
                         </p>
+                        <!-- Dedicated Independent Thumbnail Controls -->
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; background: rgba(0,0,0,0.3); border: 1px solid rgba(255, 186, 8, 0.25); border-radius: 10px; padding: 12px 14px;">
+                            <button type="button" id="btnGenerateThumbnail" style="padding: 10px 16px; border-radius: 8px; border: 1px solid #f59e0b; background: rgba(245, 158, 11, 0.15); color: #fbbf24; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s;">
+                                <span>🍌 Generate 4K AI Thumbnail</span>
+                            </button>
+                            <button type="button" id="btnUploadThumbnailManual" style="padding: 10px 16px; border-radius: 8px; border: 1px solid #38bdf8; background: rgba(56, 189, 248, 0.12); color: #38bdf8; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s;">
+                                <span>📁 Upload Manually</span>
+                            </button>
+                            <input type="file" id="manualThumbFileInput" accept="image/jpeg,image/png,image/webp" style="display: none;">
+                            <button type="button" id="btnSkipThumbnail" style="padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.06); color: #cbd5e1; font-weight: 600; font-size: 13px; cursor: pointer;">
+                                <span>⏭️ Skip Thumbnail</span>
+                            </button>
+                            <span id="thumbnailStageStatus" style="margin-left: auto; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 20px; background: rgba(255, 255, 255, 0.08); color: #cbd5e1; border: 1px solid rgba(255, 255, 255, 0.15);">⚪ Thumbnail: Pending</span>
+                        </div>
+
                         <div class="thumbnail-gallery-grid" id="thumbnailGalleryGrid"></div>
 
                         <!-- Thumbnail Directive Card -->
@@ -3283,7 +3334,75 @@ HTML_MAIN = """
             if (input) input.value = `https://youtu.be/${videoId}`;
             selectVideoFormat(isShort ? 'Short' : 'Long');
             window._selectedChannelVideoMeta = (window._cachedChannelVideos && window._cachedChannelVideos[videoId]) || null;
+
+            // Automatically check and restore saved pipeline record (Resumable Pipeline)
+            checkAndRestorePipelineRecord(videoId);
         };
+
+        // Resumable Pipeline Auto-Restore Helper
+        async function checkAndRestorePipelineRecord(videoId) {
+            if (!videoId) return;
+            try {
+                const res = await fetch(`/api/pipeline/record?video_id=${encodeURIComponent(videoId)}`);
+                const data = await safeParseJson(res);
+                if (data && data.success && data.record && data.record.analysis_result) {
+                    const rec = data.record;
+                    currentGeminiData = rec.analysis_result;
+                    renderGeminiResults(rec.analysis_result);
+
+                    // Restore exact pipeline status
+                    if (rec.publish_status === 'published') {
+                        updatePipelineStatus('published');
+                    } else if (rec.youtube_update_status === 'completed') {
+                        updatePipelineStatus('applied');
+                    } else {
+                        updatePipelineStatus('ready_to_apply');
+                    }
+
+                    // Restore thumbnail status
+                    updateThumbnailStatusBadge(rec.thumbnail_status, rec.thumbnail_error);
+                }
+            } catch (e) {
+                console.log("Notice checking pipeline record:", e);
+            }
+        }
+
+        function updateThumbnailStatusBadge(status, errorMsg) {
+            const badge = document.getElementById('thumbnailStageStatus');
+            if (!badge) return;
+            if (status === 'completed') {
+                badge.textContent = '✔ Thumbnail: Complete';
+                badge.style.background = 'rgba(16,185,129,0.2)';
+                badge.style.borderColor = 'rgba(16,185,129,0.5)';
+                badge.style.color = '#34d399';
+            } else if (status === 'manual') {
+                badge.textContent = '✔ Thumbnail: Manually Uploaded';
+                badge.style.background = 'rgba(56,189,248,0.2)';
+                badge.style.borderColor = 'rgba(56,189,248,0.5)';
+                badge.style.color = '#38bdf8';
+            } else if (status === 'generating') {
+                badge.textContent = '🍌 Generating 4K Poster...';
+                badge.style.background = 'rgba(245,158,11,0.2)';
+                badge.style.borderColor = 'rgba(245,158,11,0.5)';
+                badge.style.color = '#fbbf24';
+            } else if (status === 'failed') {
+                const isQuota = errorMsg && (errorMsg.toLowerCase().includes('quota') || errorMsg.includes('429'));
+                badge.textContent = isQuota ? '⚠️ Thumbnail: Quota Exceeded (Optional)' : '❌ Thumbnail: Failed (Optional)';
+                badge.style.background = 'rgba(239,68,68,0.2)';
+                badge.style.borderColor = 'rgba(239,68,68,0.5)';
+                badge.style.color = '#f87171';
+            } else if (status === 'skipped') {
+                badge.textContent = '⏭️ Thumbnail: Skipped';
+                badge.style.background = 'rgba(255,255,255,0.08)';
+                badge.style.borderColor = 'rgba(255,255,255,0.2)';
+                badge.style.color = '#94a3b8';
+            } else {
+                badge.textContent = '⚪ Thumbnail: Pending';
+                badge.style.background = 'rgba(255,255,255,0.08)';
+                badge.style.borderColor = 'rgba(255,255,255,0.2)';
+                badge.style.color = '#cbd5e1';
+            }
+        }
 
         // Pipeline Status Management
         function updatePipelineStatus(state, msg) {
@@ -3336,6 +3455,9 @@ HTML_MAIN = """
                 setTimeout(() => { setStepCompleted('step2'); setStepActive('step3'); }, 3500);
                 setTimeout(() => { setStepCompleted('step3'); setStepActive('step4'); }, 7500);
 
+                const isForceRefresh = btnRunYtOptimization.dataset.forceRefresh === 'true';
+                btnRunYtOptimization.dataset.forceRefresh = 'false';
+
                 try {
                     const res = await fetch('/api/gemini/analyze_youtube_video', {
                         method: 'POST',
@@ -3345,7 +3467,7 @@ HTML_MAIN = """
                             format_type: currentSelectedFormat,
                             instructions: document.getElementById('aiCustomPrompt') ? document.getElementById('aiCustomPrompt').value : '',
                             existing_meta: window._selectedChannelVideoMeta || null,
-                            force_refresh: false
+                            force_refresh: isForceRefresh
                         })
                     });
 
@@ -3669,6 +3791,125 @@ HTML_MAIN = """
                 window.switchWorkspaceTab('manual');
                 const manualStudioSection = document.getElementById('manualStudioSection');
                 if (manualStudioSection) manualStudioSection.scrollIntoView({ behavior: 'smooth' });
+            });
+        }
+
+        // Re-Analyze Button (Force Refresh)
+        const btnReAnalyzeYtVideo = document.getElementById('btnReAnalyzeYtVideo');
+        if (btnReAnalyzeYtVideo) {
+            btnReAnalyzeYtVideo.addEventListener('click', () => {
+                if (btnRunYtOptimization) {
+                    btnRunYtOptimization.dataset.forceRefresh = 'true';
+                    btnRunYtOptimization.click();
+                }
+            });
+        }
+
+        // Dedicated Independent Thumbnail Actions
+        const btnGenerateThumbnail = document.getElementById('btnGenerateThumbnail');
+        const btnUploadThumbnailManual = document.getElementById('btnUploadThumbnailManual');
+        const manualThumbFileInput = document.getElementById('manualThumbFileInput');
+        const btnSkipThumbnail = document.getElementById('btnSkipThumbnail');
+
+        if (btnGenerateThumbnail) {
+            btnGenerateThumbnail.addEventListener('click', async () => {
+                if (!currentGeminiData || !currentGeminiData.video_id) {
+                    alert("Please select and analyze a video first.");
+                    return;
+                }
+                const vid = currentGeminiData.video_id;
+                btnGenerateThumbnail.disabled = true;
+                const origHtml = btnGenerateThumbnail.innerHTML;
+                btnGenerateThumbnail.innerHTML = `<span class="spinner" style="width:14px;height:14px;"></span> Generating 4K Poster...`;
+                updateThumbnailStatusBadge('generating');
+
+                try {
+                    const res = await fetch('/api/pipeline/generate_thumbnail', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            video_id: vid,
+                            aspect_ratio: currentGeminiData.thumbnail_aspect_ratio || '16:9',
+                            format_type: currentGeminiData.format_type || 'Long'
+                        })
+                    });
+                    const data = await safeParseJson(res);
+                    if (data && data.success && data.thumbnail) {
+                        const th = data.thumbnail;
+                        updateThumbnailStatusBadge('completed');
+                        // Prepend or select in gallery
+                        selectThumbnailFrame(null, th.url, th.filename, th.aspect_ratio);
+                        alert("🎉 4K Nano Banana Movie Poster Thumbnail generated successfully!");
+                    } else {
+                        const errMsg = (data && data.error) || "Generation failed";
+                        updateThumbnailStatusBadge('failed', errMsg);
+                        alert(`Thumbnail Notice: ${errMsg}\n\nNote: Metadata is complete! You can upload a thumbnail manually or skip.`);
+                    }
+                } catch (err) {
+                    updateThumbnailStatusBadge('failed', err.message);
+                    alert(`Thumbnail Notice: ${err.message}\n\nNote: Metadata is complete! You can upload a thumbnail manually or skip.`);
+                } finally {
+                    btnGenerateThumbnail.disabled = false;
+                    btnGenerateThumbnail.innerHTML = origHtml;
+                }
+            });
+        }
+
+        if (btnUploadThumbnailManual && manualThumbFileInput) {
+            btnUploadThumbnailManual.addEventListener('click', () => {
+                if (!currentGeminiData || !currentGeminiData.video_id) {
+                    alert("Please select and analyze a video first.");
+                    return;
+                }
+                manualThumbFileInput.click();
+            });
+
+            manualThumbFileInput.addEventListener('change', async () => {
+                const file = manualThumbFileInput.files[0];
+                if (!file || !currentGeminiData || !currentGeminiData.video_id) return;
+
+                const formData = new FormData();
+                formData.append('video_id', currentGeminiData.video_id);
+                formData.append('thumbnail_file', file);
+
+                updateThumbnailStatusBadge('generating');
+                try {
+                    const res = await fetch('/api/pipeline/upload_thumbnail', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await safeParseJson(res);
+                    if (data && data.success && data.thumbnail) {
+                        updateThumbnailStatusBadge('manual');
+                        selectThumbnailFrame(null, data.thumbnail.url, data.thumbnail.filename, currentGeminiData.thumbnail_aspect_ratio || '16:9');
+                        alert("✔ Custom thumbnail uploaded successfully!");
+                    } else {
+                        throw new Error((data && data.error) || "Upload failed");
+                    }
+                } catch (e) {
+                    updateThumbnailStatusBadge('failed', e.message);
+                    alert("Upload Error: " + e.message);
+                }
+            });
+        }
+
+        if (btnSkipThumbnail) {
+            btnSkipThumbnail.addEventListener('click', async () => {
+                if (!currentGeminiData || !currentGeminiData.video_id) {
+                    alert("Please select and analyze a video first.");
+                    return;
+                }
+                try {
+                    await fetch('/api/pipeline/skip_thumbnail', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ video_id: currentGeminiData.video_id })
+                    });
+                    updateThumbnailStatusBadge('skipped');
+                    alert("⏭️ Thumbnail stage skipped. You can proceed directly to Apply All or Publish Public.");
+                } catch (e) {
+                    console.log("Skip notice:", e);
+                }
             });
         }
 
@@ -5093,6 +5334,140 @@ def gemini_chat():
     res = gemini_engine.chat_with_gemini(message, studio_context=context, channel_id=ch_id)
     return jsonify(res)
 
+@app.route('/api/pipeline/record', methods=['GET'])
+def api_get_pipeline_record():
+    video_id = (request.args.get('video_id') or '').strip()
+    if not video_id:
+        return jsonify({'error': 'Missing video_id parameter'}), 400
+    vid = gemini_engine.extract_youtube_video_id(video_id)
+    if not vid:
+        return jsonify({'error': f"Invalid video ID: '{video_id}'"}), 400
+    record = get_pipeline_record(vid)
+    return jsonify({'success': True, 'video_id': vid, 'record': record if record else None}), 200
+
+@app.route('/api/pipeline/generate_thumbnail', methods=['POST'])
+def api_generate_thumbnail():
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        video_id = (data.get('video_id') or '').strip()
+        if not video_id:
+            return jsonify({'error': 'Missing video_id parameter'}), 400
+        vid = gemini_engine.extract_youtube_video_id(video_id)
+        if not vid:
+            return jsonify({'error': f"Invalid video ID: '{video_id}'"}), 400
+
+        ch_id = get_active_channel_id_or_default(data.get('channel_id'))
+        aspect_ratio = data.get('aspect_ratio') or '16:9'
+        format_type = data.get('format_type') or ('Short' if aspect_ratio == '9:16' else 'Long')
+
+        record = get_pipeline_record(vid)
+        metadata = record.get('analysis_result') or {}
+        if not metadata:
+            metadata = {
+                "title": record.get("generated_title", f"Video {vid}"),
+                "primary_context": record.get("generated_title", f"Video {vid}"),
+                "detected_genre": "High-Suspense Cinematic"
+            }
+
+        save_pipeline_record(vid, {"thumbnail_status": "generating"})
+
+        raw_frame_bgr, local_thumb_path = gemini_engine.download_youtube_thumbnail_frame(vid)
+        face_crop_bgr = None
+        if raw_frame_bgr is not None and raw_frame_bgr.size > 0:
+            face_crop_bgr = gemini_engine.extract_character_face_reference_crop(raw_frame_bgr, None)
+
+        try:
+            thumb_res = gemini_engine.generate_dynamic_ai_thumbnail(
+                video_path=local_thumb_path,
+                format_type=format_type,
+                aspect_ratio=aspect_ratio,
+                metadata=metadata,
+                reference_frame_bgr=raw_frame_bgr,
+                reference_face_crop_bgr=face_crop_bgr,
+                channel_id=ch_id
+            )
+            save_pipeline_record(vid, {
+                "thumbnail_status": "completed",
+                "thumbnail_filename": thumb_res["filename"],
+                "thumbnail_url": thumb_res["url"],
+                "thumbnail_error": None,
+                "last_successful_stage": "thumbnail" if record.get("youtube_update_status") == "completed" else record.get("last_successful_stage", "analysis")
+            })
+            return jsonify({
+                "success": True,
+                "thumbnail": thumb_res,
+                "message": "4K Movie Poster Thumbnail generated successfully!"
+            }), 200
+        except Exception as te:
+            err_msg = str(te)
+            is_quota = ("quota" in err_msg.lower() or "429" in err_msg or "resourceexhausted" in err_msg.lower())
+            save_pipeline_record(vid, {
+                "thumbnail_status": "failed",
+                "thumbnail_error": err_msg
+            })
+            return jsonify({
+                "success": False,
+                "error": err_msg,
+                "quota_exceeded": is_quota,
+                "message": f"Thumbnail generation failed: {err_msg}. You can manually upload a thumbnail or skip this stage."
+            }), 200
+    except Exception as e:
+        return jsonify({'error': str(e) or 'Thumbnail generation endpoint error'}), 500
+
+@app.route('/api/pipeline/upload_thumbnail', methods=['POST'])
+def api_upload_manual_thumbnail():
+    try:
+        video_id = (request.form.get('video_id') or '').strip()
+        if not video_id:
+            return jsonify({'error': 'Missing video_id parameter'}), 400
+        vid = gemini_engine.extract_youtube_video_id(video_id)
+        if not vid:
+            return jsonify({'error': f"Invalid video ID: '{video_id}'"}), 400
+
+        file = request.files.get('thumbnail_file')
+        if not file or not file.filename:
+            return jsonify({'error': 'No thumbnail file uploaded'}), 400
+
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in ['.jpg', '.jpeg', '.png', '.webp']:
+            return jsonify({'error': 'Invalid image format. Supported: JPG, PNG, WebP'}), 400
+
+        fname = f"manual_thumb_{vid}_{uuid.uuid4().hex[:8]}.jpg"
+        save_path = os.path.join(gemini_engine.THUMBNAILS_DIR, fname)
+        file.save(save_path)
+
+        url = f"/api/thumbnail_file/{fname}"
+        save_pipeline_record(vid, {
+            "thumbnail_status": "manual",
+            "thumbnail_filename": fname,
+            "thumbnail_url": url,
+            "thumbnail_error": None
+        })
+        return jsonify({
+            'success': True,
+            'thumbnail': {
+                'id': 'manual_thumb',
+                'filename': fname,
+                'url': url,
+                'label': 'Custom Uploaded Thumbnail'
+            },
+            'message': 'Manual thumbnail uploaded successfully!'
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e) or 'Failed to upload manual thumbnail'}), 500
+
+@app.route('/api/pipeline/skip_thumbnail', methods=['POST'])
+def api_skip_thumbnail():
+    data = request.get_json(force=True, silent=True) or {}
+    video_id = (data.get('video_id') or '').strip()
+    vid = gemini_engine.extract_youtube_video_id(video_id)
+    if vid:
+        save_pipeline_record(vid, {
+            "thumbnail_status": "skipped",
+            "thumbnail_error": None
+        })
+    return jsonify({'success': True, 'message': 'Thumbnail stage skipped.'}), 200
+
 @app.route('/api/gemini/analyze_youtube_video', methods=['POST'])
 def gemini_analyze_youtube_video():
     try:
@@ -5130,6 +5505,31 @@ def gemini_analyze_youtube_video():
             existing_video_meta=existing_meta,
             force_refresh=force_refresh
         )
+        # Persist analysis state for resumable pipeline
+        save_pipeline_record(vid, {
+            "analysis_status": "completed",
+            "analysis_timestamp": time.time(),
+            "model_used": metadata.get("model_used", "gemini-3.8-flash"),
+            "analysis_result": metadata,
+            "generated_title": metadata.get("title") or metadata.get("viral_title", ""),
+            "generated_description": metadata.get("description", ""),
+            "generated_tags": metadata.get("tags", []),
+            "generated_hashtags": metadata.get("hashtags", []),
+            "category_id": metadata.get("category_id", "24"),
+            "category_name": metadata.get("category_name", "Entertainment"),
+            "timestamps": metadata.get("timestamps", []),
+            "language": metadata.get("language", "Hindi / English"),
+            "summary": metadata.get("summary", ""),
+            "thumbnail_concept": metadata.get("thumbnail_concept", ""),
+            "thumbnail_prompt": metadata.get("thumbnail_prompt", ""),
+            "last_successful_stage": "analysis",
+            "youtube_update_status": "pending",
+            "thumbnail_status": metadata.get("thumbnail_status", "pending"),
+            "thumbnail_error": metadata.get("thumbnail_error"),
+            "publish_status": "pending",
+            "privacy_status": metadata.get("privacy_status", "PRIVATE")
+        })
+
         return jsonify(metadata), 200
     except Exception as e:
         import traceback
@@ -5185,6 +5585,16 @@ def publish_optimized_video():
             ).execute()
             status_msg = "Changes applied to YouTube (privacy preserved)!"
             resulting_privacy = "preserved"
+            save_pipeline_record(video_id, {
+                "youtube_update_status": "completed",
+                "youtube_update_timestamp": time.time(),
+                "youtube_update_error": None,
+                "last_successful_stage": "metadata",
+                "generated_title": title,
+                "generated_description": description,
+                "generated_tags": tags,
+                "category_id": category_id
+            })
         else:
             # Explicit publish: update snippet and set privacyStatus = 'public'
             body = {
@@ -5206,6 +5616,13 @@ def publish_optimized_video():
             ).execute()
             status_msg = "Video successfully published PUBLIC on YouTube!"
             resulting_privacy = "public"
+            save_pipeline_record(video_id, {
+                "publish_status": "published",
+                "publish_timestamp": time.time(),
+                "publish_error": None,
+                "last_successful_stage": "published",
+                "privacy_status": "PUBLIC"
+            })
 
         # 2. Upload 4K Nano Banana Thumbnail if provided
         thumb_updated = False

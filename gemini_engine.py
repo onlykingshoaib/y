@@ -2136,17 +2136,23 @@ Return STRICT JSON ONLY with these EXACT keys:
             "summary_insights": f"Pre-processed YouTube Video {video_id} analyzed. Ready for 1-click publishing."
         }
 
-    # 6. Generate SLOT 1 (DEFAULT SELECTED) 4K Nano Banana Movie Poster Thumbnail
-    slot_1_ai_thumb = generate_dynamic_ai_thumbnail(
-        video_path=local_thumb_path,
-        format_type=format_type,
-        aspect_ratio=aspect_ratio,
-        metadata=metadata,
-        reference_frame_bgr=raw_frame_bgr,
-        reference_face_crop_bgr=face_crop_bgr,
-        reference_face_box=face_box,
-        channel_id=channel_id
-    )
+    # 6. Generate SLOT 1 (DEFAULT SELECTED) 4K Nano Banana Movie Poster Thumbnail (Optional Stage)
+    slot_1_ai_thumb = None
+    thumb_error = None
+    try:
+        slot_1_ai_thumb = generate_dynamic_ai_thumbnail(
+            video_path=local_thumb_path,
+            format_type=format_type,
+            aspect_ratio=aspect_ratio,
+            metadata=metadata,
+            reference_frame_bgr=raw_frame_bgr,
+            reference_face_crop_bgr=face_crop_bgr,
+            reference_face_box=face_box,
+            channel_id=channel_id
+        )
+    except Exception as te:
+        thumb_error = str(te)
+        print(f"[Thumbnail Generation Notice] Non-fatal thumbnail failure: {te}")
 
     # 7. Map Category & Finalize Metadata
     detected_g = metadata.get("detected_genre") or metadata.get("detected_genre_emotion") or ""
@@ -2215,8 +2221,15 @@ Return STRICT JSON ONLY with these EXACT keys:
         "category": 0.92,
         "metadata": 0.95
     }
-    metadata["extracted_thumbnails"] = [slot_1_ai_thumb, slot_2_thumb]
-    metadata["selected_thumbnail"] = slot_1_ai_thumb
+    thumbs = []
+    if slot_1_ai_thumb:
+        thumbs.append(slot_1_ai_thumb)
+    if slot_2_thumb:
+        thumbs.append(slot_2_thumb)
+    metadata["extracted_thumbnails"] = thumbs
+    metadata["selected_thumbnail"] = slot_1_ai_thumb if slot_1_ai_thumb else slot_2_thumb
+    metadata["thumbnail_status"] = "completed" if slot_1_ai_thumb else ("failed" if thumb_error else "pending")
+    metadata["thumbnail_error"] = thumb_error
 
     # Sanitize dictionary to guarantee 100% clean JSON serialization
     def _sanitize(val):
