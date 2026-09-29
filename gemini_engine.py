@@ -1648,9 +1648,10 @@ def analyze_youtube_video_with_gemini(
         raise ValueError(f"Invalid YouTube URL or Video ID: '{video_id_or_url}'")
 
     cache_key = f"{video_id}_{format_type}"
+    # Never return stale cache if force_refresh is requested or default live analysis
     if not force_refresh and cache_key in ANALYSIS_CACHE:
         entry = ANALYSIS_CACHE[cache_key]
-        if time.time() - entry.get("timestamp", 0) < 7200:
+        if time.time() - entry.get("timestamp", 0) < 300:  # Short 5-min TTL for rapid repeats only
             cached_data = dict(entry["data"])
             cached_data["cached"] = True
             return cached_data
@@ -1860,10 +1861,9 @@ Return STRICT JSON ONLY with these EXACT keys:
         # Step A: Native YouTube Vision Ingestion via google-genai FileData(file_uri=youtube_url)
         youtube_url = f"https://www.youtube.com/watch?v={video_id}"
         yt_part = types.Part(
-            file_data=types.FileData(file_uri=youtube_url),
-            video_metadata=types.VideoMetadata(fps=0.5)
+            file_data=types.FileData(file_uri=youtube_url)
         )
-        for model_name in ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]:
+        for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-flash-latest"]:
             try:
                 response = client.models.generate_content(
                     model=model_name,
@@ -1884,6 +1884,7 @@ Return STRICT JSON ONLY with these EXACT keys:
                         break
             except Exception as nve:
                 print(f"[Native YouTube Vision Ingestion Notice - {model_name}] {nve}")
+                last_error = nve
 
         # Step B: Multimodal Vision + Transcript Fallback
         if not metadata:
@@ -1892,7 +1893,7 @@ Return STRICT JSON ONLY with these EXACT keys:
                 contents_payload.append(ref_pil)
             contents_payload.append(prompt_str)
 
-            for m in AUTO_ROUTING_MODELS:
+            for m in ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-latest"]:
                 try:
                     response = client.models.generate_content(
                         model=m,
@@ -1923,53 +1924,12 @@ Return STRICT JSON ONLY with these EXACT keys:
                     last_error = ce
                     continue
 
-    # Fallback metadata if needed
+    # If Gemini API encountered an error or quota exhaustion, raise explicit diagnostic error instead of fabricating movie templates
     if not metadata:
-        clean_name = re.sub(r'[^\w\s-]', '', yt_title).strip() or "YouTube Video"
-        preset = _resolve_genre_dramatic_preset("", clean_name, "", "", len(clean_name))
-        detected_genre = preset["genre_category"]
-        short_hook = " ".join(clean_name.split()[:3]).upper() or "MUST WATCH"
-        viral_title = (
-            f"{clean_name} | {detected_genre} Explained"
-            if format_type == "Short"
-            else f"{clean_name} — {detected_genre} Story Breakdown"
-        )
-        fallback_tags = [
-            clean_name.lower(), detected_genre.replace('/', ' ').lower(),
-            "youtube video", "story explained", "breakdown"
-        ]
-        fallback_desc = f"{clean_name} — {detected_genre} narrative overview.\n\n#Trending #Video #Story"
-        metadata = {
-            "detected_genre": detected_genre,
-            "detected_genre_emotion": f"{detected_genre} • High Impact",
-            "detected_language": "Hindi / English",
-            "primary_context": clean_name,
-            "climactic_context": f"Key moments in {clean_name}",
-            "spoken_audio_transcript": transcript_text[:400],
-            "true_entities": [clean_name],
-            "plot_twists": f"Key moments in {clean_name}",
-            "visual_timeline_analysis": f"Visuals sampled from YouTube video ({aspect_ratio}).",
-            "facial_expression_analysis": "Expressive emotion at peak moment",
-            "viral_title": viral_title,
-            "alternative_titles": [
-                f"{clean_name} — Full Breakdown",
-                f"{clean_name} Explained",
-                f"{clean_name} Story Analysis"
-            ],
-            "description": fallback_desc,
-            "hashtags": ["#Trending", "#Video", "#Story"],
-            "search_tags": fallback_tags,
-            "category_id": category_id or "24",
-            "category_name": "Entertainment",
-            "poster_prompt": f"4K cinematic poster for {clean_name}, {detected_genre}, intense dramatic lighting",
-            "thumbnail_prompt": f"4K cinematic poster for {clean_name}, {detected_genre}, intense dramatic lighting",
-            "thumbnail_directive": {
-                "text_overlay": short_hook,
-                "visual_scene_direction": f"4K {detected_genre} movie poster composition with character face",
-                "recommended_color_theme": "High-contrast cinematic lighting"
-            },
-            "summary_insights": f"YouTube Video {video_id} analyzed. Ready for 1-click publishing."
-        }
+        err_msg = f"Gemini multimodal video analysis failed for video '{video_id}'."
+        if last_error:
+            err_msg += f" Upstream error: {last_error}"
+        raise RuntimeError(err_msg)
 
     # 6. Generate SLOT 1 (DEFAULT SELECTED) 4K Nano Banana Movie Poster Thumbnail (Optional Stage)
     slot_1_ai_thumb = None
@@ -1993,10 +1953,10 @@ Return STRICT JSON ONLY with these EXACT keys:
     detected_g = metadata.get("detected_genre") or metadata.get("detected_genre_emotion") or ""
     cat_id, cat_name = map_genre_to_youtube_category(detected_g, metadata.get("category_id") or category_id)
 
-    # Use pure AI-generated title directly without manual mid-word cutting or slicing
+    # Use pure AI-generated title directly without cutting or slicing
     norm_title = str(metadata.get("title") or metadata.get("viral_title") or yt_title).strip()
-    if len(norm_title) > 65 and " " in norm_title[:65]:
-        norm_title = norm_title[:65].rsplit(" ", 1)[0].strip()
+    if len(norm_title) > 100:
+        norm_title = norm_title[:100].strip()
 
     # Ensure alternative titles stay strictly under 70 characters
     if "alternative_titles" in metadata and isinstance(metadata["alternative_titles"], list):

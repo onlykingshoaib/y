@@ -3721,7 +3721,7 @@ HTML_MAIN = """
 
             // 1. Title cards (Viral Title + Alternatives)
             const titleCardsGrid = document.getElementById('titleCardsGrid');
-            const primaryTitle = data.viral_title || data.primary_title || data.recommended_title || 'Viral Video Hook 🔥';
+            const primaryTitle = data.title || data.viral_title || data.primary_title || data.recommended_title || 'Viral Video Hook 🔥';
             const titles = [
                 { text: primaryTitle, tag: (isVertical ? "⭐ High-CTR Suspense Shorts Hook" : "⭐ High-CTR SEO [Hook | Keyword]"), isRec: true },
                 ...(data.alternative_titles || []).map((t, i) => ({
