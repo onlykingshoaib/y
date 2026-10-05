@@ -57,6 +57,7 @@ if not os.path.exists(TOKEN_FILE) and os.environ.get("YOUTUBE_TOKEN_JSON"):
 
 # In-memory tracking of background upload tasks
 upload_tasks = {}
+OAUTH_STATES = {}
 
 def get_stored_credentials():
     creds = None
@@ -3154,8 +3155,11 @@ def authorize():
         auth_params['login_hint'] = login_hint
 
     authorization_url, state = flow.authorization_url(**auth_params)
+    cv = getattr(flow, 'code_verifier', None)
     session['state'] = state
-    session['code_verifier'] = getattr(flow, 'code_verifier', None)
+    session['code_verifier'] = cv
+    if state and cv:
+        OAUTH_STATES[state] = cv
     return redirect(authorization_url)
 
 @app.route('/switch_account')
@@ -3166,15 +3170,16 @@ def switch_account():
 
 @app.route('/oauth2callback')
 def oauth2callback():
-    state = session.get('state')
+    state = request.args.get('state') or session.get('state')
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE,
         scopes=SCOPES,
         state=state,
         redirect_uri=url_for('oauth2callback', _external=True)
     )
-    if 'code_verifier' in session and session['code_verifier']:
-        flow.code_verifier = session['code_verifier']
+    cv = OAUTH_STATES.pop(state, None) or session.get('code_verifier')
+    if cv:
+        flow.code_verifier = cv
     flow.fetch_token(authorization_response=request.url)
     credentials = flow.credentials
 
