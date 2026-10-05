@@ -70,7 +70,7 @@ def get_youtube_service():
         "Use this tool to inspect all existing videos before editing or optimizing."
     )
 )
-def list_channel_videos(max_results: int = 15) -> str:
+def list_channel_videos(max_results: int = 15, **kwargs) -> str:
     """Lists recent videos uploaded to the authenticated YouTube channel.
 
     Args:
@@ -165,7 +165,7 @@ def list_channel_videos(max_results: int = 15) -> str:
     name="get_video_details",
     description="Retrieves full metadata for a specific YouTube video (title, description, tags, category, and statistics)."
 )
-def get_video_details(video_id: str) -> str:
+def get_video_details(video_id: str, **kwargs) -> str:
     """Retrieves full details of a specific YouTube video.
 
     Args:
@@ -231,7 +231,8 @@ def update_video_metadata(
     description: str = "",
     tags: List[str] = None,
     category_id: str = "",
-    privacy_status: str = ""
+    privacy_status: str = "",
+    **kwargs
 ) -> str:
     """Updates video title, description, tags, and settings on YouTube.
 
@@ -317,7 +318,9 @@ def update_video_metadata(
 def update_video_thumbnail(
     video_id: str,
     thumbnail_url: str = "",
-    thumbnail_path: str = ""
+    thumbnail_path: str = "",
+    thumbnail_base64: str = "",
+    **kwargs
 ) -> str:
     """Sets a custom thumbnail image for a YouTube video.
 
@@ -398,7 +401,8 @@ def update_video_thumbnail(
 def optimize_and_update_video(
     video_id: str,
     custom_instructions: str = "",
-    auto_apply: bool = True
+    auto_apply: bool = True,
+    **kwargs
 ) -> str:
     """Fetches video from YouTube, optimizes its SEO metadata, and updates it.
 
@@ -478,7 +482,10 @@ def optimize_and_update_video(
 def batch_optimize_channel_videos(
     max_videos: int = 5,
     custom_instructions: str = "",
-    auto_apply: bool = True
+    focus_topic: str = "",
+    auto_apply: bool = True,
+    update_thumbnails: bool = False,
+    **kwargs
 ) -> str:
     """Iterates through recent channel videos and optimizes their metadata.
 
@@ -525,12 +532,14 @@ def batch_optimize_channel_videos(
     )
 )
 def optimize_video_metadata(
-    title: str,
-    description: str,
-    tags: List[str],
+    title: str = "",
+    description: str = "",
+    tags: List[str] = None,
     video_url: str = "",
     format_type: str = "Short",
-    custom_instructions: str = ""
+    custom_instructions: str = "",
+    category: str = "",
+    **kwargs
 ) -> str:
     """Optimize YouTube video title, description, and tags for SEO and CTR.
 
@@ -679,14 +688,16 @@ Return STRICTLY valid JSON with schema:
     )
 )
 def upload_to_youtube(
-    title: str,
-    description: str,
-    tags: List[str],
+    title: str = "",
+    description: str = "",
+    tags: List[str] = None,
     video_url: str = "",
     privacy_status: str = "private",
     thumbnail_url: str = "",
     category_id: str = "22",
-    made_for_kids: bool = False
+    category: str = "22",
+    made_for_kids: bool = False,
+    **kwargs
 ) -> str:
     """Upload video to YouTube with specified metadata and privacy settings.
 
@@ -865,17 +876,15 @@ class UniversalCORSMiddleware:
 MCP_TOOLS_CATALOG = [
     {
         "name": "list_channel_videos",
-        "description": "Lists uploaded videos from the authenticated YouTube channel. Returns video IDs, titles, descriptions, tags, thumbnail URLs, and privacy status. Use this tool to inspect all existing videos before editing or optimizing.",
+        "description": "Lists videos from the authenticated YouTube channel. Returns video IDs, titles, descriptions, tags, thumbnail URLs, and privacy status. Use this tool first to inspect all videos on the channel.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "max_results": {
                     "type": "integer",
-                    "description": "Maximum number of videos to fetch (default: 15, max: 50).",
-                    "default": 15
+                    "description": "Maximum number of videos to fetch (1 to 50)."
                 }
-            },
-            "required": []
+            }
         }
     },
     {
@@ -955,14 +964,13 @@ MCP_TOOLS_CATALOG = [
                     "type": "string",
                     "description": "The 11-character YouTube video ID to optimize."
                 },
-                "focus_keywords": {
+                "custom_instructions": {
                     "type": "string",
-                    "description": "Optional focus keywords or target audience to guide the AI optimization."
+                    "description": "Optional SEO instructions or audience targeting."
                 },
-                "language": {
-                    "type": "string",
-                    "description": "Primary language for the optimization (default: 'en').",
-                    "default": "en"
+                "auto_apply": {
+                    "type": "boolean",
+                    "description": "Whether to automatically write changes to YouTube."
                 }
             },
             "required": ["video_id"]
@@ -970,26 +978,23 @@ MCP_TOOLS_CATALOG = [
     },
     {
         "name": "batch_optimize_channel_videos",
-        "description": "Iterates across multiple recent videos on your YouTube channel, generates AI-optimized metadata (titles, descriptions, tags, hashtags) for each, and applies updates directly.",
+        "description": "Batch-processes multiple channel videos: generates AI-optimized metadata (titles, descriptions, tags, hashtags) for each, and applies updates directly on YouTube.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "max_videos": {
                     "type": "integer",
-                    "description": "Number of recent videos to optimize (default: 5, max: 20).",
-                    "default": 5
+                    "description": "Number of recent videos to optimize (default 5, max 15)."
                 },
-                "focus_topic": {
+                "custom_instructions": {
                     "type": "string",
-                    "description": "Optional channel topic or theme to focus optimizations around."
+                    "description": "Optional SEO focus or instructions for the optimization."
                 },
-                "update_thumbnails": {
+                "auto_apply": {
                     "type": "boolean",
-                    "description": "Whether to also trigger thumbnail regeneration where supported (default: false).",
-                    "default": False
+                    "description": "Whether to directly update videos on YouTube."
                 }
-            },
-            "required": []
+            }
         }
     },
     {
@@ -1013,8 +1018,7 @@ MCP_TOOLS_CATALOG = [
                 },
                 "category": {
                     "type": "string",
-                    "description": "Target video category (default: 'People & Blogs').",
-                    "default": "People & Blogs"
+                    "description": "Target video category (default: 'People & Blogs')."
                 }
             },
             "required": ["title"]
@@ -1041,13 +1045,11 @@ MCP_TOOLS_CATALOG = [
                 },
                 "category": {
                     "type": "string",
-                    "description": "YouTube Category ID (e.g. '22' for People & Blogs, '28' for Science & Technology).",
-                    "default": "22"
+                    "description": "YouTube Category ID (e.g. '22' for People & Blogs, '28' for Science & Technology)."
                 },
                 "privacy_status": {
                     "type": "string",
-                    "description": "Visibility: 'public', 'private', or 'unlisted'. Default: 'public'.",
-                    "default": "public"
+                    "description": "Visibility: 'public', 'private', or 'unlisted'."
                 },
                 "video_url": {
                     "type": "string",
@@ -1061,8 +1063,11 @@ MCP_TOOLS_CATALOG = [
 
 MCP_TOOL_FUNCTIONS = {
     "list_channel_videos": list_channel_videos,
+    "list_videos": list_channel_videos,
+    "get_videos": list_channel_videos,
     "get_video_details": get_video_details,
     "update_video_metadata": update_video_metadata,
+    "update_video": update_video_metadata,
     "update_video_thumbnail": update_video_thumbnail,
     "optimize_and_update_video": optimize_and_update_video,
     "batch_optimize_channel_videos": batch_optimize_channel_videos,
@@ -1086,7 +1091,7 @@ def handle_jsonrpc_sync(req_data: dict) -> Optional[dict]:
     req_id = req_data.get("id")
     params = req_data.get("params") or {}
 
-    print(f"[MCP JSON-RPC DISPATCH] method='{method}', id={req_id}", flush=True)
+    print(f"[MCP JSON-RPC DISPATCH] method='{method}', id={req_id}, params={json.dumps(params)[:200]}", flush=True)
 
     if method == "initialize":
         client_proto = params.get("protocolVersion", "2024-11-05")
@@ -1096,17 +1101,19 @@ def handle_jsonrpc_sync(req_data: dict) -> Optional[dict]:
             "result": {
                 "protocolVersion": client_proto,
                 "capabilities": {
-                    "tools": {
-                        "listChanged": False
-                    },
-                    "resources": {},
-                    "prompts": {},
-                    "logging": {}
+                    "tools": {}
                 },
                 "serverInfo": {
                     "name": "YouTube Creator Studio Pro",
                     "version": "1.0.0"
-                }
+                },
+                "instructions": (
+                    "YouTube Creator Studio Pro gives you full access to manage the user's connected YouTube channel. "
+                    "Use list_channel_videos to retrieve uploaded videos from the channel. "
+                    "Use update_video_metadata to change title, description, or tags for any video. "
+                    "Use update_video_thumbnail to update a video's thumbnail image. "
+                    "Use batch_optimize_channel_videos to optimize multiple channel videos at once."
+                )
             }
         }
 
@@ -1134,8 +1141,14 @@ def handle_jsonrpc_sync(req_data: dict) -> Optional[dict]:
     elif method == "tools/call":
         tool_name = params.get("name")
         arguments = params.get("arguments") or {}
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except Exception:
+                arguments = {}
         tool_fn = MCP_TOOL_FUNCTIONS.get(tool_name)
         if not tool_fn:
+            print(f"[MCP TOOL NOT FOUND]: '{tool_name}'", flush=True)
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -1145,7 +1158,9 @@ def handle_jsonrpc_sync(req_data: dict) -> Optional[dict]:
                 }
             }
         try:
+            print(f"[MCP EXECUTING TOOL]: '{tool_name}' with args {json.dumps(arguments)[:300]}", flush=True)
             call_res = tool_fn(**arguments)
+            print(f"[MCP TOOL SUCCESS]: '{tool_name}' result length={len(str(call_res))}", flush=True)
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
