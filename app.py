@@ -6,13 +6,7 @@ import time
 import shutil
 import threading
 import tempfile
-from typing import Dict, Any, List, Optional
 from datetime import datetime
-import socket
-import ssl
-import http.client
-import httplib2
-from googleapiclient.errors import HttpError
 from flask import Flask, request, redirect, session, url_for, jsonify, render_template_string, send_from_directory
 from werkzeug.utils import secure_filename
 from google_auth_oauthlib.flow import Flow
@@ -20,42 +14,11 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
 import google.auth.transport.requests
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 import gemini_engine
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "youtube_studio_pro_permanent_production_secret_2026")
-app.config.update(
-    SESSION_COOKIE_SECURE=True,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
-    PERMANENT_SESSION_LIFETIME=86400 * 30
-)
-
-# Enable ProxyFix for reverse proxies (Render, Cloudflare, etc.)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-
-@app.after_request
-def add_no_cache_headers(response):
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-@app.errorhandler(Exception)
-def handle_global_exception(e):
-    from werkzeug.exceptions import HTTPException
-    code = 500
-    msg = str(e)
-    if isinstance(e, HTTPException):
-        code = e.code or 500
-        msg = e.description or str(e)
-    if request.path.startswith('/api/'):
-        return jsonify({'error': msg or 'Server Error'}), code
-    if code >= 500:
-        print(f"[Global Server Error] {request.path}: {e}")
-    return jsonify({'error': msg or 'Server Error'}), code
+app.secret_key = os.urandom(32)
 
 # Allow HTTP and relaxed scope matching for local testing
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
@@ -73,7 +36,6 @@ SCOPES = [
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLIENT_SECRETS_FILE = os.path.join(BASE_DIR, "client_secret.json")
 TOKEN_FILE = os.path.join(BASE_DIR, "token.json")
-ACCOUNTS_STORE_FILE = os.path.join(BASE_DIR, "user_accounts.json")
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(gemini_engine.THUMBNAILS_DIR, exist_ok=True)
@@ -96,180 +58,29 @@ if not os.path.exists(TOKEN_FILE) and os.environ.get("YOUTUBE_TOKEN_JSON"):
 # In-memory tracking of background upload tasks
 upload_tasks = {}
 
-def load_accounts_store() -> dict:
-    if os.path.exists(ACCOUNTS_STORE_FILE):
-        try:
-            with open(ACCOUNTS_STORE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Error loading accounts store: {e}")
-    return {}
-
-def save_accounts_store(data: dict):
-    try:
-        with open(ACCOUNTS_STORE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"Error saving accounts store: {e}")
-
-PIPELINE_STORE_FILE = os.path.join(UPLOAD_FOLDER, "pipeline_records.json")
-
-def load_pipeline_store() -> dict:
-    if os.path.exists(PIPELINE_STORE_FILE):
-        try:
-            with open(PIPELINE_STORE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Error loading pipeline store: {e}")
-    return {}
-
-def save_pipeline_store(data: dict):
-    try:
-        with open(PIPELINE_STORE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"Error saving pipeline store: {e}")
-
-def get_pipeline_record(video_id: str) -> dict:
-    store = load_pipeline_store()
-    return store.get(video_id, {})
-
-def save_pipeline_record(video_id: str, updates: dict) -> dict:
-    store = load_pipeline_store()
-    record = store.get(video_id, {})
-    record.update(updates)
-    record["video_id"] = video_id
-    record["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    store[video_id] = record
-    save_pipeline_store(store)
-    return record
-
-
-def save_user_account(email: str, creds_dict: dict, channels: list, active_channel_id: str = None) -> str:
-    accounts = load_accounts_store()
-    account_key = email.lower().strip() if email else (active_channel_id or "default")
-    accounts[account_key] = {
-        "email": email,
-        "credentials": creds_dict,
-        "channels": channels,
-        "active_channel_id": active_channel_id or (channels[0]['id'] if channels else None),
-        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
-    }
-    save_accounts_store(accounts)
-    return account_key
-
-def get_active_channel_id_or_default(explicit_channel_id: str = None) -> str:
-    """Returns active channel ID from request, session, or accounts store, resolving real channel IDs over 'default'."""
-    ch_id = (explicit_channel_id or "").strip()
-    if ch_id and ch_id.lower() != "default":
-        return ch_id
-
-    try:
-        if request:
-            req_ch = request.args.get('channel_id')
-            if not req_ch and request.is_json:
-                data = request.get_json(silent=True) or {}
-                req_ch = data.get('channel_id')
-            if not req_ch:
-                req_ch = request.headers.get('X-Channel-Id') or request.form.get('channel_id')
-            if req_ch and str(req_ch).strip().lower() != "default":
-                return str(req_ch).strip()
-    except Exception:
-        pass
-
-    try:
-        sess_ch = session.get('active_channel_id')
-        if sess_ch and str(sess_ch).strip().lower() != "default":
-            return str(sess_ch).strip()
-    except Exception:
-        pass
-
-    try:
-        acc_key = session.get('active_account_key') if session else None
-        store = load_accounts_store()
-        if acc_key and acc_key in store and store[acc_key].get('active_channel_id'):
-            cand = str(store[acc_key]['active_channel_id']).strip()
-            if cand and cand.lower() != "default":
-                return cand
-        if store:
-            for acc in store.values():
-                if acc.get('active_channel_id') and str(acc['active_channel_id']).strip().lower() != "default":
-                    return str(acc['active_channel_id']).strip()
-                elif acc.get('channels') and len(acc['channels']) > 0:
-                    cid = str(acc['channels'][0].get('id') or '').strip()
-                    if cid and cid.lower() != "default":
-                        return cid
-    except Exception:
-        pass
-
-    return ch_id if ch_id else "default"
-
-def get_oauth_redirect_uri():
-    # Force HTTPS when behind reverse proxy like Render or if request is secure
-    if request.headers.get('X-Forwarded-Proto') == 'https' or request.is_secure:
-        scheme = 'https'
-    else:
-        scheme = request.scheme
-    return url_for('oauth2callback', _external=True, _scheme=scheme)
-
 def get_stored_credentials():
     creds = None
-    account_key = session.get('active_account_key')
+    from flask import has_request_context
+    in_request = has_request_context()
 
-    # 1. Check session credentials first (isolated per browser session)
-    if 'credentials' in session:
-        try:
-            creds = Credentials(**session['credentials'])
-        except Exception:
-            creds = None
-
-    # 2. Check accounts store by active account key
-    if not creds and account_key:
-        accounts = load_accounts_store()
-        if account_key in accounts:
-            try:
-                creds_data = accounts[account_key]['credentials']
-                creds = Credentials(**creds_data)
-                session['credentials'] = creds_data
-                session['user_email'] = accounts[account_key].get('email', '')
-                if not session.get('active_channel_id'):
-                    session['active_channel_id'] = accounts[account_key].get('active_channel_id')
-            except Exception:
-                creds = None
-
-    # 3. Check any account from persistent accounts store
-    if not creds:
-        accounts = load_accounts_store()
-        if accounts:
-            first_key = next(iter(accounts))
-            try:
-                creds_data = accounts[first_key]['credentials']
-                creds = Credentials(**creds_data)
-                session['active_account_key'] = first_key
-                session['credentials'] = creds_data
-                session['user_email'] = accounts[first_key].get('email', '')
-                if not session.get('active_channel_id'):
-                    session['active_channel_id'] = accounts[first_key].get('active_channel_id')
-            except Exception:
-                creds = None
-
-    # 4. Fallback to initial TOKEN_FILE if available
-    if not creds and os.path.exists(TOKEN_FILE):
+    if in_request and 'credentials' in session:
+        creds = Credentials(**session['credentials'])
+    elif os.path.exists(TOKEN_FILE):
         try:
             with open(TOKEN_FILE, 'r') as f:
                 creds_data = json.load(f)
                 creds = Credentials(**creds_data)
-                session['credentials'] = creds_data
+                if in_request:
+                    session['credentials'] = creds_data
         except Exception as e:
             print(f"Error loading token.json: {e}")
             creds = None
 
-    # Auto token refresh handling
     if creds and creds.expired and creds.refresh_token:
         try:
             req = google.auth.transport.requests.Request()
             creds.refresh(req)
-            updated_dict = {
+            session_data = {
                 'token': creds.token,
                 'refresh_token': creds.refresh_token,
                 'token_uri': creds.token_uri,
@@ -277,22 +88,13 @@ def get_stored_credentials():
                 'client_secret': creds.client_secret,
                 'scopes': creds.scopes
             }
-            session['credentials'] = updated_dict
-            act_k = session.get('active_account_key')
-            if act_k:
-                accounts = load_accounts_store()
-                if act_k in accounts:
-                    accounts[act_k]['credentials'] = updated_dict
-                    save_accounts_store(accounts)
-            try:
-                with open(TOKEN_FILE, 'w') as f:
-                    json.dump(updated_dict, f)
-            except Exception:
-                pass
+            if in_request:
+                session['credentials'] = session_data
+            with open(TOKEN_FILE, 'w') as f:
+                json.dump(session_data, f)
         except Exception as e:
             print(f"Token refresh failed: {e}")
             return None
-
     return creds
 
 HTML_MAIN = """
@@ -300,14 +102,10 @@ HTML_MAIN = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
+    <meta name="viewport" content="width=1280, initial-scale=0.8">
     <title>YouTube Creator Studio Pro + Gemini AI</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
     <style>
         :root {
             --bg-base: #0f0f0f;
@@ -336,10 +134,7 @@ HTML_MAIN = """
             color: var(--text-primary);
             margin: 0;
             padding: 0;
-            min-width: 0;
-            width: 100%;
-            overflow-x: hidden;
-            -webkit-tap-highlight-color: transparent;
+            min-width: 1200px;
         }
 
         /* Top Navbar */
@@ -458,7 +253,6 @@ HTML_MAIN = """
             top: calc(100% + 8px);
             right: 0;
             width: 320px;
-            max-width: 90vw;
             background: #1c1c20;
             border: 1px solid #333338;
             border-radius: 14px;
@@ -467,12 +261,10 @@ HTML_MAIN = """
             flex-direction: column;
             z-index: 1500;
             overflow: hidden;
-            pointer-events: none;
             animation: fadeInDrop 0.18s ease-out;
         }
         .account-dropdown.show {
             display: flex;
-            pointer-events: auto;
         }
         @keyframes fadeInDrop {
             from { opacity: 0; transform: translateY(-6px); }
@@ -754,31 +546,7 @@ HTML_MAIN = """
             flex-direction: column;
             gap: 24px;
         }
-        /* Global Touch & Interaction Guarantee: All navigation tabs, inputs, and buttons */
-        .mode-tab,
-        button,
-        input,
-        select,
-        textarea,
-        .form-control,
-        .btn-upload,
-        .btn-populate,
-        #trimmer-tab,
-        #copilot-tab,
-        #tabTrimmerMode,
-        #tabGeminiMode,
-        #tabClipperMode,
-        #tabManualMode {
-            pointer-events: auto !important;
-            touch-action: manipulation;
-            position: relative;
-            z-index: 9999;
-            -webkit-tap-highlight-color: transparent;
-        }
         .mode-nav-tabs {
-            position: relative;
-            z-index: 9999;
-            pointer-events: auto !important;
             display: flex;
             gap: 10px;
             background: var(--bg-surface);
@@ -787,9 +555,6 @@ HTML_MAIN = """
             border: 1px solid var(--border-color);
         }
         .mode-tab {
-            cursor: pointer !important;
-            user-select: none;
-            -webkit-user-select: none;
             flex: 1;
             display: flex;
             align-items: center;
@@ -798,14 +563,12 @@ HTML_MAIN = """
             padding: 12px 18px;
             border-radius: 8px;
             border: none;
+            cursor: pointer;
             font-size: 14px;
             font-weight: 600;
             color: var(--text-secondary);
             background: transparent;
             transition: all 0.2s;
-        }
-        .mode-tab * {
-            pointer-events: none;
         }
         .mode-tab:hover {
             color: white;
@@ -835,66 +598,6 @@ HTML_MAIN = """
         .badge-manual {
             background: #444;
             color: #ddd;
-        }
-
-        .trimmer-explainer-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 12px;
-            align-items: end;
-            margin-bottom: 14px;
-        }
-
-        .voice-carousel-scroll {
-            display: flex;
-            overflow-x: auto;
-            gap: 14px;
-            padding: 6px 4px 14px 4px;
-            scroll-snap-type: x mandatory;
-            -webkit-overflow-scrolling: touch;
-            scrollbar-width: thin;
-            scrollbar-color: #7c3aed rgba(255,255,255,0.05);
-        }
-        .voice-carousel-card {
-            flex: 0 0 235px;
-            scroll-snap-align: start;
-            background: rgba(15, 23, 42, 0.92);
-            border: 1.5px solid rgba(124, 58, 237, 0.35);
-            border-radius: 12px;
-            padding: 14px;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            gap: 10px;
-            transition: all 0.2s ease;
-            position: relative;
-        }
-        .voice-carousel-card.selected-voice {
-            border-color: #10b981;
-            background: linear-gradient(145deg, rgba(16, 185, 129, 0.16), rgba(15, 23, 42, 0.95));
-            box-shadow: 0 0 18px rgba(16, 185, 129, 0.35);
-        }
-        .seq-step-pill {
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 11.5px;
-            font-weight: 700;
-            background: rgba(255,255,255,0.05);
-            border: 1px solid rgba(255,255,255,0.12);
-            color: #94a3b8;
-            white-space: nowrap;
-            transition: all 0.2s ease;
-        }
-        .seq-step-pill.active-step {
-            background: rgba(168, 85, 247, 0.25);
-            border-color: #a855f7;
-            color: #f3e8ff;
-            box-shadow: 0 0 10px rgba(168, 85, 247, 0.35);
-        }
-        .seq-step-pill.done-step {
-            background: rgba(16, 185, 129, 0.2);
-            border-color: #10b981;
-            color: #6ee7b7;
         }
 
         /* Gemini AI Studio Box */
@@ -1625,34 +1328,16 @@ HTML_MAIN = """
             top: 0;
             right: -440px;
             width: 420px;
-            max-width: 100vw;
             height: 100vh;
             background: #161220;
             border-left: 1px solid rgba(168, 85, 247, 0.35);
             box-shadow: -10px 0 40px rgba(0,0,0,0.8);
-            z-index: -100;
-            display: none;
+            z-index: 1001;
+            display: flex;
             flex-direction: column;
-            transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s;
-            pointer-events: none;
-            opacity: 0;
-            visibility: hidden;
+            transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
         }
-        .chat-drawer.open {
-            display: flex !important;
-            right: 0 !important;
-            pointer-events: auto !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-            z-index: 1001 !important;
-        }
-        .chat-drawer:not(.open) {
-            display: none !important;
-            pointer-events: none !important;
-            opacity: 0 !important;
-            visibility: hidden !important;
-            z-index: -100 !important;
-        }
+        .chat-drawer.open { right: 0; }
         .chat-header {
             padding: 18px 20px;
             border-bottom: 1px solid rgba(168, 85, 247, 0.2);
@@ -1773,41 +1458,12 @@ HTML_MAIN = """
         .modal-overlay {
             display: none;
             position: fixed;
-            top: 0; left: 0; width: 0; height: 0;
+            top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(0,0,0,0.75);
             backdrop-filter: blur(4px);
-            z-index: -99999;
+            z-index: 2000;
             align-items: center;
             justify-content: center;
-            pointer-events: none;
-            opacity: 0;
-            visibility: hidden;
-        }
-        .modal-overlay.active, .modal-overlay.open,
-        .modal-overlay[style*="display: flex"],
-        .modal-overlay[style*="display: block"],
-        #clipperJobsModalOverlay.active,
-        #clipperJobsModalOverlay.open,
-        #clipperJobsModalOverlay[style*="display: flex"],
-        #clipperJobsModalOverlay[style*="display: block"] {
-            display: flex !important;
-            width: 100vw !important;
-            height: 100vh !important;
-            pointer-events: auto !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-            z-index: 999999 !important;
-        }
-        .modal-overlay:not(.active):not(.open):not([style*="display: flex"]):not([style*="display: block"]),
-        #geminiModalOverlay:not(.active):not(.open):not([style*="display: flex"]):not([style*="display: block"]),
-        #clipperJobsModalOverlay:not(.active):not(.open):not([style*="display: flex"]):not([style*="display: block"]) {
-            display: none !important;
-            width: 0 !important;
-            height: 0 !important;
-            pointer-events: none !important;
-            opacity: 0 !important;
-            visibility: hidden !important;
-            z-index: -99999 !important;
         }
         .modal-card {
             background: #1b1629;
@@ -1817,7 +1473,6 @@ HTML_MAIN = """
             width: 90%;
             padding: 28px;
             box-shadow: 0 20px 50px rgba(0,0,0,0.8);
-            pointer-events: auto;
         }
         .modal-header {
             display: flex;
@@ -1836,229 +1491,6 @@ HTML_MAIN = """
             animation: spin 1s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-                /* Dedicated Bottom AI Thumbnail Chat Engine Styles */
-        .bottom-thumb-chat-card {
-            background: linear-gradient(135deg, rgba(23, 17, 36, 0.95), rgba(30, 20, 50, 0.95));
-            border: 1px solid rgba(168, 85, 247, 0.45);
-            border-radius: 12px;
-            padding: 18px 20px;
-            margin-top: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-        }
-        .bottom-thumb-chat-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 14px;
-            flex-wrap: wrap;
-            gap: 8px;
-            border-bottom: 1px solid rgba(168, 85, 247, 0.2);
-            padding-bottom: 10px;
-        }
-        .bottom-thumb-chat-body {
-            display: flex;
-            gap: 20px;
-            flex-wrap: wrap;
-            align-items: flex-start;
-        }
-        .bottom-thumb-preview-box {
-            width: 100%;
-            height: 145px;
-            background: rgba(0, 0, 0, 0.6);
-            border: 2px dashed rgba(168, 85, 247, 0.35);
-            border-radius: 10px;
-            overflow: hidden;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-        }
-        .verification-warning-banner {
-            background: rgba(245, 158, 11, 0.12);
-            border: 1px solid rgba(245, 158, 11, 0.4);
-            color: #fef08a;
-            border-radius: 8px;
-            padding: 12px 16px;
-            margin-bottom: 14px;
-            font-size: 13px;
-            line-height: 1.5;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        /* AI Movie-to-Shorts Auto-Clipper Styles */
-        .clipper-card {
-            background: #171321;
-            border: 1px solid rgba(255, 0, 85, 0.3);
-            border-radius: var(--card-radius);
-            padding: 24px;
-            margin-bottom: 24px;
-        }
-        .scene-item-card {
-            background: #15111e;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
-            overflow: hidden;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .scene-item-card:hover {
-            border-color: rgba(255, 0, 85, 0.4);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-        }
-        .scene-header {
-            background: rgba(255, 255, 255, 0.03);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-            padding: 12px 18px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .part-pill {
-            background: linear-gradient(135deg, #ff0055, #9333ea);
-            color: white;
-            font-size: 11px;
-            font-weight: 700;
-            padding: 4px 10px;
-            border-radius: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .timestamp-pill {
-            background: #231c30;
-            color: #d8b4fe;
-            font-size: 12px;
-            font-weight: 600;
-            padding: 4px 10px;
-            border-radius: 6px;
-            border: 1px solid rgba(168, 85, 247, 0.3);
-        }
-        .status-badge {
-            font-size: 11px;
-            font-weight: 600;
-            padding: 4px 10px;
-            border-radius: 6px;
-        }
-        .status-planned {
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-muted);
-            border: 1px solid #444;
-        }
-        .status-ready {
-            background: rgba(43, 166, 64, 0.2);
-            color: #4ade80;
-            border: 1px solid #2ba640;
-        }
-        .status-uploaded {
-            background: rgba(59, 130, 246, 0.2);
-            color: #60a5fa;
-            border: 1px solid #3b82f6;
-        }
-        .scene-body {
-            padding: 18px;
-            display: grid;
-            grid-template-columns: 200px 1fr;
-            gap: 20px;
-        }
-        @media (max-width: 960px) {
-            .main-container {
-                grid-template-columns: 1fr;
-                padding: 0 12px;
-                margin: 12px auto;
-                gap: 16px;
-                width: 100%;
-                max-width: 100%;
-            }
-            .sidebar {
-                order: 2;
-                width: 100%;
-            }
-            .workspace {
-                order: 1;
-                min-width: 0;
-                width: 100%;
-            }
-            .mode-nav-tabs {
-                position: relative;
-                z-index: 9999;
-                flex-wrap: wrap;
-                gap: 8px;
-            }
-            .mode-tab {
-                min-width: 130px;
-                padding: 12px 14px;
-                font-size: 13px;
-                pointer-events: auto !important;
-                z-index: 9999;
-                touch-action: manipulation;
-            }
-            .top-navbar {
-                padding: 0 14px;
-            }
-            .chat-drawer {
-                width: 100vw;
-                right: -100vw;
-            }
-            .chat-drawer.open {
-                right: 0 !important;
-            }
-            .trimmer-explainer-grid {
-                grid-template-columns: 1fr;
-                gap: 12px;
-            }
-        }
-        @media (max-width: 800px) {
-            .scene-body { grid-template-columns: 1fr; }
-        }
-        .scene-video-box {
-            width: 100%;
-            aspect-ratio: 9/16;
-            max-height: 350px;
-            background: #0d0a14;
-            border-radius: 8px;
-            overflow: hidden;
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            position: relative;
-        }
-        .scene-video-box video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-        .placeholder-916 {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            color: var(--text-muted);
-            text-align: center;
-            padding: 16px;
-        }
-        .scene-meta-box {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        .field-label {
-            display: block;
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-bottom: 4px;
-        }
-        .scene-actions-row {
-            display: flex;
-            gap: 10px;
-            margin-top: auto;
-            padding-top: 10px;
-            flex-wrap: wrap;
-        }
     </style>
 </head>
 <body>
@@ -2083,7 +1515,7 @@ HTML_MAIN = """
             <!-- YouTube Channel Pill with Dropdown Trigger -->
             <div class="account-nav-wrap">
                 <div class="account-pill" id="userPill" title="Click to Switch Channel or Google Account">
-                    <img id="userAvatar" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'><circle cx='18' cy='18' r='18' fill='%23383838'/><circle cx='18' cy='14' r='7' fill='%23aaaaaa'/><path d='M6 31 C 6 22, 30 22, 30 31' fill='%23aaaaaa'/></svg>" alt="Channel Avatar" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'><circle cx=\'18\' cy=\'18\' r=\'18\' fill=\'%23383838\'/><circle cx=\'18\' cy=\'14\' r=\'7\' fill=\'%23aaaaaa\'/><path d=\'M6 31 C 6 22, 30 22, 30 31\' fill=\'%23aaaaaa\'/></svg>'">
+                    <img id="userAvatar" src="https://via.placeholder.com/64/333333/ffffff?text=YT" alt="avatar">
                     <span id="userName">YouTube Creator</span>
                     <span style="font-size: 10px; color: var(--text-muted); margin-left: 2px;">▼</span>
                 </div>
@@ -2091,7 +1523,7 @@ HTML_MAIN = """
                 <!-- Account / Multi-Channel Switcher Dropdown -->
                 <div class="account-dropdown" id="accountDropdown">
                     <div class="dropdown-email-header">
-                        <img id="dropAvatar" class="dropdown-email-avatar" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><circle cx='20' cy='20' r='20' fill='%23383838'/><circle cx='20' cy='15' r='8' fill='%23aaaaaa'/><path d='M7 35 C 7 25, 33 25, 33 35' fill='%23aaaaaa'/></svg>" alt="Channel Avatar">
+                        <img id="dropAvatar" class="dropdown-email-avatar" src="https://via.placeholder.com/64/333333/ffffff?text=YT" alt="avatar">
                         <div class="dropdown-email-info">
                             <span id="dropChannelName" class="dropdown-email-name">Channel</span>
                             <span id="dropUserEmail" class="dropdown-email-addr">account@gmail.com</span>
@@ -2125,7 +1557,7 @@ HTML_MAIN = """
         <!-- Left Sidebar: Channel Overview & Quota -->
         <aside class="sidebar">
             <div class="card channel-profile">
-                <img id="channelAvatarLarge" class="channel-avatar" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='90' height='90' viewBox='0 0 90 90'><circle cx='45' cy='45' r='45' fill='%23282828'/><circle cx='45' cy='34' r='18' fill='%23aaaaaa'/><path d='M15 76 C 15 54, 75 54, 75 76' fill='%23aaaaaa'/></svg>" alt="Channel Profile Picture" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'90\' height=\'90\' viewBox=\'0 0 90 90\'><circle cx=\'45\' cy=\'45\' r=\'45\' fill=\'%23282828\'/><circle cx=\'45\' cy=\'34\' r=\'18\' fill=\'%23aaaaaa\'/><path d=\'M15 76 C 15 54, 75 54, 75 76\' fill=\'%23aaaaaa\'/></svg>'">
+                <img id="channelAvatarLarge" class="channel-avatar" src="https://via.placeholder.com/128/333333/ffffff?text=YT" alt="Avatar">
                 <h3 id="channelTitle" class="channel-name">Channel</h3>
                 <div id="channelHandle" class="channel-handle">@channel</div>
                 
@@ -2176,14 +1608,14 @@ HTML_MAIN = """
         <!-- Right Main Workspace -->
         <section class="workspace">
             
-            <!-- Mode Switcher Tabs (Original Two Core Pillars) -->
+            <!-- Mode Switcher Tabs -->
             <div class="mode-nav-tabs">
-                <button type="button" class="mode-tab active-ai" id="tabGeminiMode" onclick="switchWorkspaceTab('gemini')">
+                <button class="mode-tab active-ai" id="tabGeminiMode">
                     <span>✨</span>
                     <span>Gemini AI Studio Copilot</span>
                     <span class="tab-badge badge-ai">PRO MULTIMODAL</span>
                 </button>
-                <button type="button" class="mode-tab" id="tabManualMode" onclick="switchWorkspaceTab('manual')">
+                <button class="mode-tab" id="tabManualMode">
                     <span>🛠️</span>
                     <span>Standard Manual Studio</span>
                     <span class="tab-badge badge-manual">CLASSIC</span>
@@ -2193,14 +1625,14 @@ HTML_MAIN = """
             <!-- ============================================== -->
             <!-- 1. GEMINI AI STUDIO COPILOT PANEL              -->
             <!-- ============================================== -->
-            <div class="card" id="geminiStudioSection" style="display: block;">
+            <div class="card" id="geminiStudioSection">
                 <div class="ai-banner">
                     <div class="ai-banner-left">
                         <div class="ai-banner-title">
-                            <span>✨ Gemini Multimodal Video Analysis &amp; Dynamic AI Thumbnail Suite</span>
+                            <span>✨ Gemini 3.8 Flash Multimodal Video Ingestion</span>
                         </div>
                         <div class="ai-banner-desc">
-                            Upload any Short or Long-form video. Gemini deeply analyzes spoken dialogue, ground-truth plot, and expressions — generating a custom Slot 1 AI Dynamic Thumbnail (9:16 for Shorts, 16:9 for Long-form) plus 5 High-Emotion Local Video Frames (Slots 2–6).
+                            Upload any Short or Long-form video. Gemini analyzes spoken dialogue, narrative pacing, story hooks, and extracts 100% authentic character face thumbnails directly from your video stream.
                         </div>
                     </div>
                     <button class="btn-populate" id="btnOpenKeyModal" style="padding: 8px 14px; font-size: 13px;">
@@ -2211,108 +1643,45 @@ HTML_MAIN = """
                 <!-- Video Format Selector (Shorts vs Long Form) -->
                 <div class="form-group" style="margin-bottom: 16px;">
                     <div class="form-label" style="margin-bottom: 8px;">
-                        <span style="font-size: 14px; font-weight: 700; color: #f3e8ff;">🎯 Video Target Format &amp; Aspect Ratio Engine:</span>
-                        <span style="font-size: 11px; color: #c084fc;">Auto-configures algorithm rules &amp; 9:16 vs 16:9 thumbnail rendering</span>
+                        <span style="font-size: 14px; font-weight: 700; color: #f3e8ff;">🎯 Video Target Format & SEO Engine:</span>
+                        <span style="font-size: 11px; color: #c084fc;">Select format to activate tailored algorithm rules</span>
                     </div>
                     <div class="format-selector-grid">
                         <div class="format-card active" id="formatCardShort" onclick="selectVideoFormat('Short')">
                             <div class="format-card-header">
                                 <span class="format-icon">📱</span>
-                                <span class="format-badge-pill">9:16 Vertical Ratio</span>
+                                <span class="format-badge-pill">High Velocity Hook</span>
                             </div>
-                            <div class="format-card-title">YouTube Shorts / Reels</div>
-                            <div class="format-card-desc">Strict 9:16 Thumbnail &bull; Curiosity hook &lt; 50 chars &bull; 2 viral hashtags &bull; 8-12 search tags</div>
+                            <div class="format-card-title">YouTube Shorts</div>
+                            <div class="format-card-desc">&lt; 60s Vertical &bull; Curiosity hook &lt; 50 chars &bull; 2 viral hashtags &bull; 8-12 search tags</div>
                         </div>
                         <div class="format-card" id="formatCardLong" onclick="selectVideoFormat('Long')">
                             <div class="format-card-header">
                                 <span class="format-icon">🎬</span>
-                                <span class="format-badge-pill" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">16:9 Cinematic Ratio</span>
+                                <span class="format-badge-pill" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">Deep Search Ranking</span>
                             </div>
                             <div class="format-card-title">Long Form Video</div>
-                            <div class="format-card-desc">Strict 16:9 Thumbnail &bull; [Hook] | [High Volume Keyword] &bull; 3-paragraph summary &bull; 15-20 search tags</div>
+                            <div class="format-card-desc">Standard Landscape &bull; [Hook] | [High Volume Keyword] &bull; 3-paragraph summary &bull; 15-20 search tags</div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Ingestion Source Switcher -->
-                <div class="form-group" style="margin-bottom: 18px;">
-                    <div style="display: flex; gap: 10px; background: rgba(0,0,0,0.4); padding: 5px; border-radius: 12px; border: 1px solid rgba(168, 85, 247, 0.3);">
-                        <button type="button" id="btnIngestSourceYouTube" class="ingest-tab-btn active" onclick="switchIngestSource('youtube')" style="flex: 1; padding: 11px 16px; border-radius: 8px; border: none; font-weight: 700; font-size: 13.5px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, #a855f7, #ec4899); color: white; transition: all 0.2s;">
-                            <svg style="width: 18px; height: 18px; fill: currentColor;" viewBox="0 0 24 24"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
-                            <span>⚡ YouTube Video Optimizer (&lt; 30s • 4K Poster)</span>
-                        </button>
-                        <button type="button" id="btnIngestSourceLocal" class="ingest-tab-btn" onclick="switchIngestSource('local')" style="flex: 1; padding: 11px 16px; border-radius: 8px; border: none; font-weight: 700; font-size: 13.5px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; background: transparent; color: #a1a1aa; transition: all 0.2s;">
-                            <svg style="width: 18px; height: 18px; fill: currentColor;" viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
-                            <span>📁 Ingest Local Video File</span>
-                        </button>
+                <!-- Video Dropzone for Gemini -->
+                <div class="form-group">
+                    <div class="ai-dropzone" id="aiVideoDropzone">
+                        <input type="file" id="aiVideoFileInput" accept="video/mp4,video/x-matroska,video/quicktime,video/webm">
+                        <svg class="ai-icon" viewBox="0 0 24 24"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
+                        <div style="font-size: 18px; font-weight: 700; color: #f3e8ff; margin-bottom: 6px;">
+                            Drag & Drop Video to Ingest with Gemini AI
+                        </div>
+                        <div style="font-size: 13px; color: #c084fc;">
+                            Supports MP4, MKV, WebM, MOV &bull; Seconds to Hours &bull; Shorts & Long-Form
+                        </div>
+                        <div class="selected-file-info" id="aiVideoFileInfo" style="color: #e9d5ff; font-weight: 600;"></div>
                     </div>
                 </div>
 
-                <!-- PANEL 1: YouTube Video Optimizer (Instant & Zero Server Bandwidth) -->
-                <div id="youtubeIngestPanel" style="display: block;">
-                    <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 12px; padding: 18px; margin-bottom: 16px;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
-                            <div style="font-size: 14.5px; font-weight: 800; color: #f3e8ff; display: flex; align-items: center; gap: 8px;">
-                                <span>🚀</span> 1-Click Fast Workflow: Upload Private to YouTube &amp; Optimize Here
-                            </div>
-                            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                                <span id="pipelineStatusBadge" style="font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: 20px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); color: #cbd5e1; display: inline-flex; align-items: center; gap: 5px; transition: all 0.3s;">⚪ Ready to analyze</span>
-                                <span style="font-size: 11px; background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700;">Zero Server Upload Bandwidth</span>
-                            </div>
-                        </div>
-                        <div style="font-size: 12.5px; color: #d8b4fe; line-height: 1.5; margin-bottom: 14px;">
-                            Upload your Short or Long video directly to YouTube (Web or Mobile App) as <strong>"Private"</strong> or <strong>"Unlisted"</strong>. YouTube pre-processes 100% accurate Hindi/English auto-subtitles and duration. Paste URL or select below to generate a <strong>4K Nano Banana Movie Poster Thumbnail</strong> and publish Public in seconds!
-                        </div>
-
-                        <!-- URL Input & Button -->
-                        <div style="display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;">
-                            <input type="text" id="ytOptimizeUrlInput" placeholder="Paste YouTube Video URL or ID (e.g. https://youtu.be/xyz or 9psiSgSoZoc)..." style="flex: 1; min-width: 260px; padding: 12px 14px; font-size: 14px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 8px; color: white;">
-                            <button type="button" id="btnRunYtOptimization" class="btn-ai-analyze" style="width: auto; padding: 0 20px; margin-top: 0; white-space: nowrap;">
-                                <svg style="width: 18px; height: 18px; fill: white;" viewBox="0 0 24 24"><path d="M12 2l2.4 7.4h7.6l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4-6.2-4.5h7.6z"/></svg>
-                                <span>⚡ Analyze &amp; Optimize</span>
-                            </button>
-                            <button type="button" id="btnReAnalyzeYtVideo" class="btn-populate" style="width: auto; padding: 0 16px; margin-top: 0; white-space: nowrap; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.2); color: #cbd5e1;" title="Force fresh analysis without cache">
-                                <span>🔄 Re-Analyze</span>
-                            </button>
-                        </div>
-
-                        <!-- Channel Uploads Picker -->
-                        <div>
-                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-                                <span style="font-size: 12px; font-weight: 700; color: #c084fc; text-transform: uppercase; letter-spacing: 0.5px;">Or Select From Your Channel Uploads:</span>
-                                <button type="button" onclick="loadChannelVideosForPicker()" style="background: transparent; border: none; color: #38bdf8; font-size: 11.5px; cursor: pointer; text-decoration: underline;">🔄 Refresh Videos</button>
-                            </div>
-                            <div id="channelVideosPickerGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 240px; overflow-y: auto; padding: 4px;">
-                                <div style="color: var(--text-muted); font-size: 12px; grid-column: 1/-1; text-align: center; padding: 12px;">Loading channel videos...</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- PANEL 2: Local Video File Ingest -->
-                <div id="localIngestPanel" style="display: none;">
-                    <div class="form-group">
-                        <div class="ai-dropzone" id="aiVideoDropzone">
-                            <input type="file" id="aiVideoFileInput" accept="video/mp4,video/x-matroska,video/quicktime,video/webm">
-                            <svg class="ai-icon" viewBox="0 0 24 24"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
-                            <div style="font-size: 18px; font-weight: 700; color: #f3e8ff; margin-bottom: 6px;">
-                                Drag &amp; Drop Video to Ingest with Gemini AI
-                            </div>
-                            <div style="font-size: 13px; color: #c084fc;">
-                                Supports MP4, MKV, WebM, MOV &bull; Seconds to Hours &bull; Shorts (9:16) &amp; Long-Form (16:9)
-                            </div>
-                            <div class="selected-file-info" id="aiVideoFileInfo" style="color: #e9d5ff; font-weight: 600;"></div>
-                        </div>
-                    </div>
-
-                    <!-- Run AI Button for Local Files -->
-                    <button class="btn-ai-analyze" id="btnRunAiAnalysis" style="margin-top: 12px;">
-                        <svg style="width: 20px; height: 20px; fill: white;" viewBox="0 0 24 24"><path d="M12 2l2.4 7.4h7.6l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4-6.2-4.5h7.6z"/></svg>
-                        <span>Analyze Local Video &amp; Generate AI Thumbnail + Metadata</span>
-                    </button>
-                </div>
-
-                <!-- Shared Creator Guidance / Instructions -->
+                <!-- Optional Creator Instructions -->
                 <div class="form-group" style="margin-top: 14px;">
                     <div class="form-label">
                         <span>Creative Direction / Specific Instructions (Optional)</span>
@@ -2320,6 +1689,12 @@ HTML_MAIN = """
                     </div>
                     <input type="text" id="aiCustomPrompt" placeholder="Add specific guidance or leave blank for automatic viral optimization...">
                 </div>
+
+                <!-- Run AI Button -->
+                <button class="btn-ai-analyze" id="btnRunAiAnalysis">
+                    <svg style="width: 20px; height: 20px; fill: white;" viewBox="0 0 24 24"><path d="M12 2l2.4 7.4h7.6l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4-6.2-4.5h7.6z"/></svg>
+                    <span>Analyze Video & Generate Human-Grade Metadata</span>
+                </button>
 
                 <!-- Dynamic Stepper Progress -->
                 <div class="ai-steps-container" id="aiStepsContainer">
@@ -2330,23 +1705,23 @@ HTML_MAIN = """
                     <div class="ai-steps-list">
                         <div class="ai-step-item" id="step1">
                             <span class="step-circle">1</span>
-                            <span>Extracting 5 High-Emotion Local Video Keyframes (Slots 2 to 6)</span>
+                            <span>Extracting 100% Authentic Character Face Keyframes (Canvas & Stream Decoder)</span>
                         </div>
                         <div class="ai-step-item" id="step2">
                             <span class="step-circle">2</span>
-                            <span>Uploading Video Stream to Gemini Multimodal Engine</span>
+                            <span>Uploading Video to Gemini 3.8 Flash Multimodal Engine</span>
                         </div>
                         <div class="ai-step-item" id="step3">
                             <span class="step-circle">3</span>
-                            <span>Analyzing Ground-Truth Plot, Facial Expressions &amp; Climactic Context</span>
+                            <span>Analyzing Spoken Dialogue, Audio Tone, Story Beats & Expressions</span>
                         </div>
                         <div class="ai-step-item" id="step4">
                             <span class="step-circle">4</span>
-                            <span>Generating Slot 1 Dynamic AI Thumbnail (9:16 / 16:9) &amp; Search-Grounded Titles</span>
+                            <span>Formulating High-CTR Viral Titles & Rich SEO Description</span>
                         </div>
                         <div class="ai-step-item" id="step5">
                             <span class="step-circle">5</span>
-                            <span>Auto-Selecting Slot 1 AI Thumbnail &amp; Finalizing Metadata</span>
+                            <span>Ranking Optimal Authentic Thumbnail & Finalizing Metadata</span>
                         </div>
                     </div>
                 </div>
@@ -2356,48 +1731,36 @@ HTML_MAIN = """
                 <!-- ============================================== -->
                 <div class="gemini-results-box" id="geminiResultsBox">
 
-                    <!-- AI Mood, Genre, Format & Dual-Track Intelligence Card -->
-                    <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 12px; padding: 16px 20px; margin-bottom: 18px;">
+                    <!-- AI Mood, Format & Search Grounding Intelligence Card -->
+                    <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 12px; padding: 16px 20px; margin-bottom: 22px;">
                         <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px;">
                             <div style="display: flex; align-items: center; gap: 12px;">
                                 <span style="font-size: 24px;">🎯</span>
                                 <div>
-                                    <div style="font-size: 11px; text-transform: uppercase; color: #c084fc; font-weight: 700; letter-spacing: 0.5px;">Auto-Detected Ratio</div>
-                                    <div id="aiTargetFormatBadge" style="font-size: 15px; font-weight: 800; color: #fff;">YouTube Shorts (9:16)</div>
-                                </div>
-                            </div>
-                            <div style="display: flex; align-items: center; gap: 12px;">
-                                <span style="font-size: 24px;">🎬</span>
-                                <div>
-                                    <div style="font-size: 11px; text-transform: uppercase; color: #f43f5e; font-weight: 700; letter-spacing: 0.5px;">Detected Video Genre</div>
-                                    <div id="aiDetectedGenre" style="font-size: 15px; font-weight: 800; color: #fff;">War/Heroic &bull; High Impact</div>
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #c084fc; font-weight: 700; letter-spacing: 0.5px;">Target Format Strategy</div>
+                                    <div id="aiTargetFormatBadge" style="font-size: 15px; font-weight: 800; color: #fff;">YouTube Shorts</div>
                                 </div>
                             </div>
                             <div style="display: flex; align-items: center; gap: 12px;">
                                 <span style="font-size: 24px;">👤</span>
                                 <div>
-                                    <div style="font-size: 11px; text-transform: uppercase; color: #38bdf8; font-weight: 700; letter-spacing: 0.5px;">True Entities &amp; Plot</div>
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #38bdf8; font-weight: 700; letter-spacing: 0.5px;">Primary Context / Speaker</div>
                                     <div id="aiPrimaryContext" style="font-size: 15px; font-weight: 800; color: #fff;">Autonomous Evaluation</div>
                                 </div>
                             </div>
                             <div style="display: flex; align-items: center; gap: 12px;">
-                                <span style="font-size: 24px;">🍌</span>
+                                <span style="font-size: 24px;">🔍</span>
                                 <div>
-                                    <div style="font-size: 11px; text-transform: uppercase; color: #ffba08; font-weight: 700; letter-spacing: 0.5px;">4K Thumbnail Engine</div>
-                                    <div id="aiEngineModelBadge" style="font-size: 14px; font-weight: 700; color: #fff;">Gemini 2.5 + 4K Nano Banana</div>
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #4ade80; font-weight: 700; letter-spacing: 0.5px;">Algorithm Grounding</div>
+                                    <div style="font-size: 14px; font-weight: 700; color: #4ade80;">Google Search Active</div>
                                 </div>
                             </div>
-                        </div>
-
-                        <!-- Deep Dual-Track Breakdown (100% Spoken Audio + Visual Timeline) -->
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(168, 85, 247, 0.22);">
-                            <div style="background: rgba(0, 0, 0, 0.35); border-left: 3px solid #10b981; border-radius: 8px; padding: 10px 12px;">
-                                <div style="font-size: 11px; font-weight: 800; color: #34d399; text-transform: uppercase; letter-spacing: 0.4px;">🎙️ Track 1: 100% Spoken Audio &amp; Dialogue Transcript</div>
-                                <div id="aiSpokenAudioTranscript" style="font-size: 12px; color: #e2e8f0; margin-top: 4px; line-height: 1.45; max-height: 80px; overflow-y: auto;">Transcribing spoken audio stream...</div>
-                            </div>
-                            <div style="background: rgba(0, 0, 0, 0.35); border-left: 3px solid #38bdf8; border-radius: 8px; padding: 10px 12px;">
-                                <div style="font-size: 11px; font-weight: 800; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.4px;">🎞️ Track 2: Visual Timeline &amp; Plot Twist Analysis</div>
-                                <div id="aiVisualTimelineAnalysis" style="font-size: 12px; color: #e2e8f0; margin-top: 4px; line-height: 1.45; max-height: 80px; overflow-y: auto;">Sampling timeline frames...</div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="font-size: 24px;">⚡</span>
+                                <div>
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #ffba08; font-weight: 700; letter-spacing: 0.5px;">Engine Model</div>
+                                    <div style="font-size: 14px; font-weight: 700; color: #fff;">Gemini 2.5 Flash</div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -2406,44 +1769,29 @@ HTML_MAIN = """
                     <div class="result-group">
                         <div class="result-group-title">
                             <span>Viral Title Recommendations (Click card to select)</span>
-                            <span style="font-size: 12px; color: #a855f7;">Ranked by Estimated CTR &amp; Emotion</span>
+                            <span style="font-size: 12px; color: #a855f7;">Ranked by Estimated CTR & Punchline</span>
                         </div>
                         <div class="title-cards-grid" id="titleCardsGrid"></div>
                     </div>
 
-                    <!-- Hyper-Engaging 4K Nano Banana Thumbnail Suite (Slot 1 4K AI Default + Slots 2-6 Local Frames) -->
+                    <!-- Authentic Video Thumbnails Picker -->
                     <div class="result-group">
-                        <div class="result-group-title" style="flex-wrap: wrap; gap: 8px;">
-                            <span>🍌 4K Nano Banana Thumbnail Suite: Slot 1 AI Poster (Default Selected) + Slots 2–6 High-Emotion Local Frames</span>
-                            <span id="aiThumbAspectRatioBadge" style="font-size: 11.5px; background: rgba(16, 185, 129, 0.2); color: #4ade80; border: 1px solid rgba(16, 185, 129, 0.45); padding: 3px 10px; border-radius: 6px; font-weight: 800;">✔ 9:16 Vertical Auto-Detected (1080×1920)</span>
+                        <div class="result-group-title">
+                            <span>100% Authentic Character Face Thumbnail Picker</span>
+                            <span style="font-size: 12px; color: #2ba640;">✔ Guaranteed 100% Match from Real Video Stream</span>
                         </div>
-                        <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">
-                            <strong>Slot 1 (Default Selected)</strong> extracts the highest-emotion character face from your video, preserves <strong>100% character facial identity</strong>, and applies genre-specific 4K poster rendering (War/Heroic explosions &amp; smoke, Horror/Thriller shadows, or Comedy/Drama vibrant pop). <strong>Slots 2 to 6</strong> are 5 native high-emotion keyframes.
+                        <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 10px 0;">
+                            These frames were extracted directly from the uploaded video. Click any frame to set it as your official YouTube video thumbnail.
                         </p>
-                        <!-- Dedicated Independent Thumbnail Controls -->
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; background: rgba(0,0,0,0.3); border: 1px solid rgba(255, 186, 8, 0.25); border-radius: 10px; padding: 12px 14px;">
-                            <button type="button" id="btnGenerateThumbnail" style="padding: 10px 16px; border-radius: 8px; border: 1px solid #f59e0b; background: rgba(245, 158, 11, 0.15); color: #fbbf24; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s;">
-                                <span>🍌 Generate 4K AI Thumbnail</span>
-                            </button>
-                            <button type="button" id="btnUploadThumbnailManual" style="padding: 10px 16px; border-radius: 8px; border: 1px solid #38bdf8; background: rgba(56, 189, 248, 0.12); color: #38bdf8; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s;">
-                                <span>📁 Upload Manually</span>
-                            </button>
-                            <input type="file" id="manualThumbFileInput" accept="image/jpeg,image/png,image/webp" style="display: none;">
-                            <button type="button" id="btnSkipThumbnail" style="padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.06); color: #cbd5e1; font-weight: 600; font-size: 13px; cursor: pointer;">
-                                <span>⏭️ Skip Thumbnail</span>
-                            </button>
-                            <span id="thumbnailStageStatus" style="margin-left: auto; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 20px; background: rgba(255, 255, 255, 0.08); color: #cbd5e1; border: 1px solid rgba(255, 255, 255, 0.15);">⚪ Thumbnail: Pending</span>
-                        </div>
-
                         <div class="thumbnail-gallery-grid" id="thumbnailGalleryGrid"></div>
 
                         <!-- Thumbnail Directive Card -->
                         <div style="background: #171624; border: 1px solid rgba(255, 186, 8, 0.35); border-radius: 10px; padding: 16px; margin-top: 14px;">
                             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
                                 <span style="font-size: 13px; font-weight: 800; color: #ffba08; display: flex; align-items: center; gap: 8px;">
-                                    <span>🎨</span> 4K Nano Banana Art Direction &amp; Genre Styling
+                                    <span>🎨</span> Thumbnail Directive & Art Direction
                                 </span>
-                                <span style="font-size: 11px; color: var(--text-muted);">100% Character Face Identity Preserved</span>
+                                <span style="font-size: 11px; color: var(--text-muted);">High CTR visual composition</span>
                             </div>
                             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;">
                                 <div style="background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 3px solid #ffba08;">
@@ -2458,10 +1806,6 @@ HTML_MAIN = """
                                     <div style="font-size: 11px; color: #ec4899; font-weight: 700; text-transform: uppercase;">Recommended Color Theme</div>
                                     <div id="aiThumbColorTheme" style="font-size: 12px; color: #e2e8f0; margin-top: 4px; line-height: 1.4;">-</div>
                                 </div>
-                                <div style="background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 3px solid #10b981; grid-column: 1 / -1;">
-                                    <div style="font-size: 11px; color: #10b981; font-weight: 700; text-transform: uppercase;">Cinematic Thumbnail Concept</div>
-                                    <div id="aiThumbConceptDisplay" style="font-size: 12.5px; color: #e2e8f0; margin-top: 4px; line-height: 1.45;">-</div>
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -2473,17 +1817,6 @@ HTML_MAIN = """
                             <span style="font-size: 11px; color: var(--text-muted);">Formatted for YouTube algorithm</span>
                         </div>
                         <textarea id="aiGeneratedDesc" style="height: 160px; font-size: 13px;"></textarea>
-                    </div>
-
-                    <!-- Timestamps / Chapters -->
-                    <div class="result-group">
-                        <div class="result-group-title">
-                            <span>⏱️ Video Chapter Timestamps</span>
-                            <span id="aiTimestampCount" style="font-size: 11px; color: var(--text-muted);">Auto-detected sections</span>
-                        </div>
-                        <div id="aiTimestampsDisplay" style="background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 8px; padding: 12px 14px; font-size: 13px; line-height: 1.6; color: #e2e8f0;">
-                            No chapter timestamps needed
-                        </div>
                     </div>
 
                     <!-- Niche Targeted Hashtags -->
@@ -2498,7 +1831,7 @@ HTML_MAIN = """
                     <!-- Tags Cloud -->
                     <div class="result-group">
                         <div class="result-group-title">
-                            <span>Targeted Search &amp; Discovery Keywords</span>
+                            <span>Targeted Search & Discovery Keywords</span>
                             <span id="aiTagCount" style="font-size: 12px; color: var(--text-muted);">SEO tags</span>
                         </div>
                         <div class="tags-wrapper" id="aiTagsDisplay"></div>
@@ -2508,11 +1841,11 @@ HTML_MAIN = """
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px;">
                         <div class="stat-box" style="text-align: left; padding: 14px;">
                             <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Recommended Category</div>
-                            <div id="aiCategoryName" style="font-size: 16px; font-weight: 700; color: white; margin-top: 4px;">People &amp; Blogs</div>
+                            <div id="aiCategoryName" style="font-size: 16px; font-weight: 700; color: white; margin-top: 4px;">People & Blogs</div>
                             <div id="aiCategoryId" style="font-size: 11px; color: #a855f7; margin-top: 2px;">ID: 22</div>
                         </div>
                         <div class="stat-box" style="text-align: left; padding: 14px;">
-                            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Audience &amp; Format</div>
+                            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Audience & Format</div>
                             <div id="aiVideoTypeBadge" style="font-size: 16px; font-weight: 700; color: white; margin-top: 4px;">Long-form Video</div>
                             <div id="aiKidsBadge" style="font-size: 11px; color: #2ba640; margin-top: 2px;">General Audience (Not for kids)</div>
                         </div>
@@ -2524,138 +1857,19 @@ HTML_MAIN = """
                         <div id="aiSummaryInsights" style="font-size: 13px; color: #e9d5ff; line-height: 1.5;"></div>
                     </div>
 
-                    <!-- ============================================== -->
-                    <!-- DEDICATED BOTTOM AI THUMBNAIL CHAT ENGINE       -->
-                    <!-- ============================================== -->
-                    <div class="bottom-thumb-chat-card" id="bottomThumbChatEngine">
-                        <div class="bottom-thumb-chat-header">
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                <span style="font-size: 24px;">🎨</span>
-                                <div>
-                                    <div style="font-size: 15px; font-weight: 800; color: #f3e8ff;">
-                                        Dedicated AI Thumbnail Chat Assistant &amp; Auto-Prompt Engine
-                                    </div>
-                                    <div style="font-size: 11.5px; color: #c084fc;">
-                                        Auto-synthesizes visual prompts from characters &amp; mood &bull; Powered by <strong style="color: #ffba08;">gemini-3.1-flash-image</strong>
-                                    </div>
-                                </div>
-                            </div>
-                            <span class="tab-badge badge-ai" style="padding: 4px 10px; font-size: 11px;">4K POSTER INJECTION</span>
-                        </div>
-
-                        <!-- Verification Warning Banner (Hidden by default, shown if 403 uploadForbidden happens) -->
-                        <div id="thumbVerificationWarningBanner" class="verification-warning-banner" style="display: none;">
-                            <span style="font-size: 18px;">⚠️</span>
-                            <div>
-                                <strong>YouTube Phone Verification Required to set custom thumbnails:</strong>
-                                <span>Please visit <a href="https://www.youtube.com/verify" target="_blank" style="color: #fbbf24; text-decoration: underline; font-weight: 700;">youtube.com/verify</a> to unlock custom thumbnail uploads for your channel. (All metadata and video visibility have been saved successfully!)</span>
-                            </div>
-                        </div>
-
-                        <div class="bottom-thumb-chat-body">
-                            <!-- Left: Auto-Prompt & Controls -->
-                            <div style="flex: 1.4; min-width: 280px;">
-                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
-                                    <span style="font-size: 12px; font-weight: 700; color: #e9d5ff;">✨ Auto-Synthesized Visual Prompt (Characters &amp; Mood):</span>
-                                    <span id="promptAutoStatus" style="font-size: 11px; color: #34d399; font-weight: 700;">✔ Auto-Generated by Gemini</span>
-                                </div>
-                                <textarea id="bottomThumbPromptInput" rows="3" placeholder="Gemini is synthesizing character visual prompt..." style="width: 100%; padding: 10px 12px; border-radius: 8px; background: rgba(0,0,0,0.5); border: 1px solid rgba(168, 85, 247, 0.4); color: #fff; font-size: 12.5px; line-height: 1.4; resize: none;"></textarea>
-
-                                <div style="display: flex; gap: 10px; margin-top: 10px; align-items: center; flex-wrap: wrap;">
-                                    <button type="button" id="btnBottomGenerateThumb" style="padding: 10px 18px; border-radius: 8px; border: none; background: linear-gradient(135deg, #a855f7, #ec4899); color: white; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 15px rgba(168, 85, 247, 0.35); transition: all 0.2s;">
-                                        <span>✨ Generate 4K AI Thumbnail</span>
-                                    </button>
-                                    <div id="thumbAutoInjectCountdown" style="display: none; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: #fbbf24; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); padding: 6px 12px; border-radius: 6px;">
-                                        <span class="spinner" style="width: 12px; height: 12px;"></span>
-                                        <span id="countdownText">Auto-attaching to Slot 1 in 2s...</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Right: Real-time 4K Preview Box -->
-                            <div style="flex: 1; min-width: 230px; display: flex; flex-direction: column; align-items: center;">
-                                <div style="font-size: 11.5px; font-weight: 700; color: #cbd5e1; margin-bottom: 6px; width: 100%; text-align: left;">
-                                    Live 4K Thumbnail Preview:
-                                </div>
-                                <div id="bottomThumbPreviewContainer" class="bottom-thumb-preview-box">
-                                    <img id="bottomThumbPreviewImg" src="" alt="4K AI Thumbnail Preview" style="display: none; width: 100%; height: 100%; object-fit: cover; border-radius: 8px;">
-                                    <div id="bottomThumbPlaceholder" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #94a3b8; text-align: center; padding: 16px;">
-                                        <span style="font-size: 28px; margin-bottom: 6px;">🍌</span>
-                                        <span style="font-size: 12px; font-weight: 600; color: #e2e8f0;">4K Nano Banana Preview</span>
-                                        <span style="font-size: 10.5px; color: #94a3b8; margin-top: 4px;">Displays immediately upon generation</span>
-                                    </div>
-                                </div>
-                                <div id="bottomThumbAttachedBadge" style="display: none; margin-top: 8px; font-size: 11.5px; font-weight: 800; color: #10b981; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); padding: 4px 12px; border-radius: 20px;">
-                                    ✔ Attached to Slot 1 for 1-Click Publishing!
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Actions Row -->
-                    <div class="ai-actions-row"  style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px;">
-                        <button type="button" class="btn-populate" id="btnPopulateToManual" style="flex: 1; min-width: 170px;">
-                            <span>📝 Edit in Manual Studio</span>
+                    <!-- Dual Actions -->
+                    <div class="ai-actions-row">
+                        <button class="btn-populate" id="btnPopulateToManual">
+                            <span>📝 Auto-Populate Studio Form</span>
                         </button>
-                        <button type="button" class="btn-populate" id="btnApplyMetadata" style="flex: 1.2; min-width: 210px; background: rgba(56, 189, 248, 0.14); border: 1px solid #38bdf8; color: #38bdf8;">
-                            <span>💾 Apply Changes to YouTube</span>
-                        </button>
-                        <button type="button" class="btn-auto-publish" id="btnPublishPublic" style="flex: 1.4; min-width: 210px; background: linear-gradient(135deg, #ef4444, #ec4899); border: none;">
-                            <svg style="width: 18px; height: 18px; fill: white;" viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
-                            <span>🚀 Publish Public</span>
+                        <button class="btn-auto-publish" id="btnOneClickPublish">
+                            <svg style="width: 20px; height: 20px; fill: white;" viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
+                            <span>One-Click Auto-Publish to YouTube</span>
                         </button>
                     </div>
 
                 </div>
 
-            </div>
-
-            <!-- Publish Public Confirmation Modal -->
-            <div id="publishConfirmModal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.82); backdrop-filter: blur(8px); z-index: 10000; align-items: center; justify-content: center; padding: 16px;">
-                <div style="background: #171228; border: 1px solid rgba(236, 72, 153, 0.5); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 30px rgba(236, 72, 153, 0.25); border-radius: 16px; max-width: 520px; width: 100%; padding: 24px; color: white;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 12px;">
-                        <div style="font-size: 17px; font-weight: 800; display: flex; align-items: center; gap: 8px; color: #f43f5e;">
-                            <span>🚀</span> Confirm Public YouTube Release
-                        </div>
-                        <button type="button" onclick="closePublishConfirmModal()" style="background: transparent; border: none; color: #94a3b8; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
-                    </div>
-
-                    <p style="font-size: 13px; color: #cbd5e1; margin-bottom: 16px; line-height: 1.5;">
-                        You are about to make this video <strong>PUBLIC</strong> on YouTube. Anyone will be able to search, watch, and share it.
-                    </p>
-
-                    <div style="background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 14px; margin-bottom: 18px; display: flex; flex-direction: column; gap: 10px; font-size: 13px;">
-                        <div style="display: flex; justify-content: space-between;">
-                            <span style="color: #94a3b8;">Video ID:</span>
-                            <span id="modalVideoId" style="font-family: monospace; font-weight: 700; color: #38bdf8;">-</span>
-                        </div>
-                        <div style="display: flex; justify-content: space-between;">
-                            <span style="color: #94a3b8;">Visibility Change:</span>
-                            <span id="modalVisibilityChange" style="font-weight: 800; color: #4ade80;">PRIVATE ➔ PUBLIC</span>
-                        </div>
-                        <div style="display: flex; justify-content: space-between;">
-                            <span style="color: #94a3b8;">Category:</span>
-                            <span id="modalCategory" style="font-weight: 700; color: #e2e8f0;">-</span>
-                        </div>
-                        <div style="display: flex; justify-content: space-between;">
-                            <span style="color: #94a3b8;">Thumbnail:</span>
-                            <span id="modalThumbnailStatus" style="font-weight: 700; color: #ffba08;">Slot 1 Attached</span>
-                        </div>
-                        <div style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 8px;">
-                            <span style="color: #94a3b8; display: block; font-size: 11px; text-transform: uppercase;">Final Title:</span>
-                            <span id="modalFinalTitle" style="font-weight: 700; color: #f8fafc; font-size: 13px; display: block; margin-top: 2px;">-</span>
-                        </div>
-                    </div>
-
-                    <div style="display: flex; gap: 12px; justify-content: flex-end;">
-                        <button type="button" onclick="closePublishConfirmModal()" style="padding: 10px 18px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.2); background: transparent; color: #cbd5e1; font-weight: 700; cursor: pointer;">
-                            Cancel
-                        </button>
-                        <button type="button" id="btnConfirmGoPublic" style="padding: 10px 22px; border-radius: 8px; border: none; background: linear-gradient(135deg, #ef4444, #ec4899); color: white; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);">
-                            <span>✔ Confirm &amp; Go Public</span>
-                        </button>
-                    </div>
-                </div>
             </div>
 
             <!-- ============================================== -->
@@ -2850,7 +2064,7 @@ HTML_MAIN = """
         <span>Gemini AI Assistant</span>
     </button>
 
-    <div class="chat-drawer" id="chatDrawer" style="display: none; pointer-events: none; opacity: 0; visibility: hidden; z-index: -100;">
+    <div class="chat-drawer" id="chatDrawer">
         <div class="chat-header">
             <div class="chat-header-title">
                 <span>✨</span>
@@ -2879,52 +2093,38 @@ HTML_MAIN = """
     </div>
 
     <!-- ============================================== -->
+    <!-- GEMINI API CONFIG MODAL                        -->
     <!-- ============================================== -->
-    <!-- GEMINI API CONFIG MODAL (10-KEY POOL)          -->
-    <!-- ============================================== -->
-    <div class="modal-overlay" id="geminiModalOverlay" style="display: none; pointer-events: none; opacity: 0; visibility: hidden; z-index: -100;">
-        <div class="modal-card" style="max-width: 520px; width: 95%; max-height: 90vh; overflow-y: auto; padding: 24px;">
-            <div class="modal-header" style="margin-bottom: 14px;">
-                <h3 style="display: flex; align-items: center; gap: 8px; font-size: 17px; margin: 0;">
-                    <span>⚡</span>
-                    <span>Universal Gemini Multimodal AI</span>
+    <div class="modal-overlay" id="geminiModalOverlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>
+                    <span>⚙️</span>
+                    <span>Gemini API Key Setup</span>
                 </h3>
                 <button class="btn-close-chat" id="btnCloseKeyModal">&times;</button>
             </div>
-            
-            <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
-                    <div style="font-size: 13px; font-weight: 600; color: #f0fdf4;">
-                        Channel: <span id="modalActiveChannelTitle" style="color: #38bdf8;">YouTube Creator</span>
-                    </div>
-                    <span id="geminiEngineStatusBadge" style="font-size: 11px; background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.4); border-radius: 12px; padding: 2px 8px; font-weight: 600;">
-                        Auto-Routing Active
-                    </span>
+            <p style="font-size: 13px; color: #c084fc; margin-top: 0; line-height: 1.5;">
+                Enter your Google Gemini API key to activate the multimodal video intelligence engine (Gemini 3.8 Flash).
+            </p>
+            <div class="form-group">
+                <div class="form-label">
+                    <span>Gemini API Key</span>
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #3ea6ff; font-size: 11px; text-decoration: none;">Get Free Key &#8599;</a>
                 </div>
-                <div style="font-size: 11.5px; color: #94a3b8; line-height: 1.45;">
-                    🤖 <strong>Self-Optimizing Multimodal Pipeline:</strong> Connects to Google's dynamic multimodal models (Gemini 3.8 / Flash / Auto-Failover). Zero manual model versioning required.
-                </div>
+                <input type="text" id="geminiApiKeyInput" placeholder="AIzaSy...">
             </div>
-
-            <!-- Single Universal API Key Box -->
-            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 16px; margin-bottom: 12px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <span style="font-size: 13px; font-weight: 600; color: #f8fafc;">Universal Gemini API Key</span>
-                    <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #38bdf8; font-size: 11.5px; text-decoration: none;">Get Free Key &#8599;</a>
-                </div>
-                <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
-                    <input type="password" id="geminiApiKeyInput" placeholder="Enter Gemini API key (AIzaSy...)" style="flex: 1; min-width: 220px; margin-bottom: 0;">
-                    <button class="btn-ai-analyze" id="btnSaveGeminiKey" style="padding: 10px 18px; white-space: nowrap; font-size: 13px;">
-                        <span>⚡ Connect &amp; Validate</span>
-                    </button>
-                </div>
-                <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #94a3b8;">
-                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e;"></span>
-                    <span>Active Multi-Vision: <strong>Auto-Routing Gemini 3.8 / Flash</strong></span>
-                </div>
+            <div class="form-group">
+                <div class="form-label">Active Gemini Model</div>
+                <select id="geminiModelSelect">
+                    <option value="gemini-3.8-flash" selected>gemini-3.8-flash (Recommended &bull; Fast Multimodal)</option>
+                    <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Ultra-fast)</option>
+                </select>
             </div>
-
-            <div id="geminiKeyStatusMsg" style="font-size: 12.5px; margin: 8px 0; display: none; padding: 10px 14px; border-radius: 6px;"></div>
+            <div id="geminiKeyStatusMsg" style="font-size: 13px; margin: 10px 0; display: none;"></div>
+            <button class="btn-ai-analyze" id="btnSaveGeminiKey" style="margin-top: 10px; padding: 12px;">
+                <span>Verify & Save API Key</span>
+            </button>
         </div>
     </div>
 
@@ -2941,266 +2141,106 @@ HTML_MAIN = """
         let tempVideoServerFilename = null;
         let clientExtractedFrames = [];
 
-        // Safe JSON parsing helper to completely prevent 'Unexpected end of JSON input'
-        window.safeParseJson = safeParseJson;
-        async function safeParseJson(res) {
-            let text = "";
-            try {
-                text = await res.text();
-            } catch (e) {
-                text = "";
-            }
-            let data = null;
-            if (text && text.trim()) {
-                try {
-                    data = JSON.parse(text);
-                } catch (parseErr) {
-                    data = { error: `Server returned non-JSON (HTTP ${res.status}): ${text.substring(0, 150)}` };
-                }
-            } else {
-                data = { error: `Server returned empty response (HTTP ${res.status}).` };
-            }
-            if (!res.ok) {
-                const msg = (data && data.error) ? data.error : `Request failed with HTTP status ${res.status}`;
-                const err = new Error(msg);
-                err.status = res.status;
-                err.data = data;
-                throw err;
-            }
-            return data;
-        }
+        // Tab Switching
+        const tabGeminiMode = document.getElementById('tabGeminiMode');
+        const tabManualMode = document.getElementById('tabManualMode');
+        const geminiStudioSection = document.getElementById('geminiStudioSection');
+        const manualStudioSection = document.getElementById('manualStudioSection');
 
-        // Registry of detached modal elements so they can be hard-removed from root DOM when closed
-        window._detachedModals = window._detachedModals || {};
+        tabGeminiMode.addEventListener('click', () => {
+            tabGeminiMode.className = 'mode-tab active-ai';
+            tabManualMode.className = 'mode-tab';
+            geminiStudioSection.style.display = 'block';
+            manualStudioSection.style.display = 'none';
+        });
 
-        // Force-strip and hard-remove any invisible blocking backdrops/overlays from root DOM
-        window.forceClearBlockingOverlays = function() {
-            try {
-                document.querySelectorAll('.modal-overlay, #geminiModalOverlay, #clipperJobsModalOverlay, #chatDrawerBackdrop, #chatDrawer').forEach(el => {
-                    if (el.id) {
-                        window._detachedModals[el.id] = el;
-                    }
-                    if (!el.classList.contains('active') && !el.classList.contains('open')) {
-                        el.style.setProperty('display', 'none', 'important');
-                        el.style.setProperty('pointer-events', 'none', 'important');
-                        el.style.setProperty('opacity', '0', 'important');
-                        el.style.setProperty('visibility', 'hidden', 'important');
-                        el.style.setProperty('z-index', '-99999', 'important');
-                        el.style.setProperty('width', '0', 'important');
-                        el.style.setProperty('height', '0', 'important');
-                        if (el.parentNode) {
-                            el.parentNode.removeChild(el);
-                        }
-                    }
-                });
-                document.querySelectorAll('.mode-tab, button, input, select, textarea, .form-control, .btn-upload, .btn-populate').forEach(el => {
-                    el.style.setProperty('pointer-events', 'auto', 'important');
-                    el.style.setProperty('touch-action', 'manipulation');
-                    if (!el.style.position) el.style.position = 'relative';
-                    if (!el.style.zIndex) el.style.zIndex = '9999';
-                });
-            } catch (e) {}
-        };
+        tabManualMode.addEventListener('click', () => {
+            tabManualMode.className = 'mode-tab active-manual';
+            tabGeminiMode.className = 'mode-tab';
+            manualStudioSection.style.display = 'block';
+            geminiStudioSection.style.display = 'none';
+        });
 
-        // Tab Switching Engine (Globally accessible on window)
-        window.switchWorkspaceTab = function(activeTab) {
-            try {
-                window.forceClearBlockingOverlays();
-                const targetKey = (activeTab === 'manual') ? 'manual' : 'gemini';
-                const tabs = {
-                    'gemini': { tab: document.getElementById('tabGeminiMode'), sec: document.getElementById('geminiStudioSection'), activeCls: 'active-ai' },
-                    'manual': { tab: document.getElementById('tabManualMode'), sec: document.getElementById('manualStudioSection'), activeCls: 'active-manual' }
-                };
-
-                Object.keys(tabs).forEach(key => {
-                    const item = tabs[key];
-                    if (item.tab) {
-                        item.tab.className = 'mode-tab' + (targetKey === key ? (' ' + item.activeCls) : '');
-                        item.tab.style.pointerEvents = 'auto';
-                        item.tab.style.cursor = 'pointer';
-                        item.tab.style.zIndex = '9999';
-                    }
-                    if (item.sec) {
-                        item.sec.style.display = (targetKey === key) ? 'block' : 'none';
-                    }
-                });
-                try {
-                    localStorage.setItem('active_studio_tab', targetKey);
-                } catch(e) {}
-            } catch (err) {
-                console.warn("switchWorkspaceTab error:", err);
-            }
-        };
-
-        // Mobile touch & click binder for navigation tabs
-        function bindTabButton(id, tabName) {
-            const btn = document.getElementById(id);
-            if (!btn) return;
-            btn.style.pointerEvents = 'auto';
-            btn.style.cursor = 'pointer';
-            btn.style.zIndex = '9999';
-            let touched = false;
-            btn.addEventListener('touchstart', (e) => {
-                // Passive touch start - do not block browser gestures or touch tracking
-            }, { passive: true });
-            btn.addEventListener('touchend', (e) => {
-                touched = true;
-                window.switchWorkspaceTab(tabName);
-                setTimeout(() => { touched = false; }, 350);
-            }, { passive: true });
-            btn.addEventListener('click', (e) => {
-                if (touched) return;
-                window.switchWorkspaceTab(tabName);
-            });
-        }
-
-        // ==============================================
-        // SINGLE UNIVERSAL GEMINI API INTEGRATION (FRONTEND)
-        // ==============================================
-        window.currentActiveChannelId = 'default';
-        window.currentActiveChannelTitle = 'YouTube Creator';
-
+        // Gemini Key Modal
         const geminiNavPill = document.getElementById('geminiNavPill');
         const geminiDot = document.getElementById('geminiDot');
         const geminiStatusLabel = document.getElementById('geminiStatusLabel');
-        const geminiModalOverlay = document.getElementById('geminiModalOverlay') || window._detachedModals['geminiModalOverlay'];
-        if (geminiModalOverlay) window._detachedModals['geminiModalOverlay'] = geminiModalOverlay;
+        const geminiModalOverlay = document.getElementById('geminiModalOverlay');
         const btnOpenKeyModal = document.getElementById('btnOpenKeyModal');
         const btnCloseKeyModal = document.getElementById('btnCloseKeyModal');
         const btnSaveGeminiKey = document.getElementById('btnSaveGeminiKey');
         const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
+        const geminiModelSelect = document.getElementById('geminiModelSelect');
         const geminiKeyStatusMsg = document.getElementById('geminiKeyStatusMsg');
-        const modalActiveChannelTitle = document.getElementById('modalActiveChannelTitle');
-        const geminiEngineStatusBadge = document.getElementById('geminiEngineStatusBadge');
 
-        function openKeyModal() {
-            const modalEl = geminiModalOverlay || window._detachedModals['geminiModalOverlay'];
-            if (modalEl) {
-                if (!document.body.contains(modalEl)) {
-                    document.body.appendChild(modalEl);
-                }
-                modalEl.classList.add('active');
-                modalEl.style.display = 'flex';
-                modalEl.style.pointerEvents = 'auto';
-                modalEl.style.opacity = '1';
-                modalEl.style.visibility = 'visible';
-                modalEl.style.width = '100vw';
-                modalEl.style.height = '100vh';
-                modalEl.style.zIndex = '999999';
-                if (modalActiveChannelTitle) {
-                    modalActiveChannelTitle.textContent = window.currentActiveChannelTitle || 'Active Channel';
-                }
-                checkGeminiStatus();
-            }
-        }
+        function openKeyModal() { geminiModalOverlay.style.display = 'flex'; }
+        function closeKeyModal() { geminiModalOverlay.style.display = 'none'; }
 
-        function closeKeyModal() {
-            const modalEl = geminiModalOverlay || window._detachedModals['geminiModalOverlay'];
-            if (modalEl) {
-                modalEl.classList.remove('active');
-                modalEl.style.display = 'none';
-                modalEl.style.pointerEvents = 'none';
-                modalEl.style.opacity = '0';
-                modalEl.style.visibility = 'hidden';
-                modalEl.style.zIndex = '-99999';
-                if (modalEl.parentNode) {
-                    modalEl.parentNode.removeChild(modalEl);
-                }
-            }
-        }
-
-        if (geminiNavPill) geminiNavPill.addEventListener('click', openKeyModal);
-        if (btnOpenKeyModal) btnOpenKeyModal.addEventListener('click', openKeyModal);
-        if (btnCloseKeyModal) btnCloseKeyModal.addEventListener('click', closeKeyModal);
-        if (geminiModalOverlay) {
-            geminiModalOverlay.addEventListener('click', (e) => {
-                if (e.target === geminiModalOverlay) closeKeyModal();
-            });
-        }
-
-        function showKeyStatus(msg, isSuccess) {
-            if (!geminiKeyStatusMsg) return;
-            geminiKeyStatusMsg.style.display = 'block';
-            geminiKeyStatusMsg.style.background = isSuccess ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)';
-            geminiKeyStatusMsg.style.color = isSuccess ? '#4ade80' : '#f87171';
-            geminiKeyStatusMsg.style.border = `1px solid ${isSuccess ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`;
-            geminiKeyStatusMsg.textContent = msg;
-        }
+        geminiNavPill.addEventListener('click', openKeyModal);
+        btnOpenKeyModal.addEventListener('click', openKeyModal);
+        btnCloseKeyModal.addEventListener('click', closeKeyModal);
 
         async function checkGeminiStatus() {
             try {
-                const res = await fetch(`/api/gemini/status?channel_id=${encodeURIComponent(window.currentActiveChannelId || 'default')}`);
-                const data = await safeParseJson(res);
-                if (data.is_configured && data.has_key) {
-                    if (geminiDot) geminiDot.className = 'status-dot active';
-                    if (geminiStatusLabel) geminiStatusLabel.textContent = `Gemini Active (${data.masked_key})`;
-                    if (btnOpenKeyModal) btnOpenKeyModal.textContent = `⚙️ Key: ${data.masked_key}`;
-                    if (geminiEngineStatusBadge) {
-                        geminiEngineStatusBadge.textContent = `🟢 Active (${data.model || 'Auto-Routing'})`;
-                        geminiEngineStatusBadge.style.background = 'rgba(34, 197, 94, 0.2)';
-                        geminiEngineStatusBadge.style.color = '#4ade80';
-                    }
-                    if (geminiApiKeyInput && !geminiApiKeyInput.value) {
-                        geminiApiKeyInput.placeholder = `Active Key: ${data.masked_key}`;
-                    }
+                const res = await fetch('/api/gemini/status');
+                const data = await res.json();
+                if (data.has_key) {
+                    geminiDot.className = 'status-dot active';
+                    geminiStatusLabel.textContent = `Gemini Active (${data.masked_key})`;
+                    btnOpenKeyModal.textContent = `⚙️ Key: ${data.masked_key}`;
                 } else {
-                    if (geminiDot) geminiDot.className = 'status-dot warning';
-                    if (geminiStatusLabel) geminiStatusLabel.textContent = 'Setup Gemini Key';
-                    if (btnOpenKeyModal) btnOpenKeyModal.textContent = '⚙️ Configure API Key';
-                    if (geminiEngineStatusBadge) {
-                        geminiEngineStatusBadge.textContent = 'Key Required';
-                        geminiEngineStatusBadge.style.background = 'rgba(239, 68, 68, 0.2)';
-                        geminiEngineStatusBadge.style.color = '#f87171';
-                    }
+                    geminiDot.className = 'status-dot warning';
+                    geminiStatusLabel.textContent = 'Setup Gemini Key';
+                    btnOpenKeyModal.textContent = '⚙️ Configure API Key';
                 }
             } catch (err) {
                 console.error("Gemini status check failed", err);
             }
         }
 
-        if (btnSaveGeminiKey) {
-            btnSaveGeminiKey.addEventListener('click', async () => {
-                const key = geminiApiKeyInput.value.trim();
-                if (!key) {
-                    alert("Please enter your Gemini API key!");
-                    return;
-                }
-                btnSaveGeminiKey.disabled = true;
-                btnSaveGeminiKey.innerHTML = '<span class="spinner" style="width: 14px; height: 14px;"></span> Validating...';
-                if (geminiKeyStatusMsg) geminiKeyStatusMsg.style.display = 'none';
+        btnSaveGeminiKey.addEventListener('click', async () => {
+            const key = geminiApiKeyInput.value.trim();
+            const model = geminiModelSelect.value;
+            if (!key) {
+                alert("Please enter a valid Gemini API key!");
+                return;
+            }
+            btnSaveGeminiKey.disabled = true;
+            btnSaveGeminiKey.innerHTML = '<span class="spinner" style="width: 16px; height: 16px;"></span> Verifying Key...';
+            geminiKeyStatusMsg.style.display = 'none';
 
-                try {
-                    const cleanChId = window.currentActiveChannelId || 'default';
-                    const res = await fetch('/api/gemini/config', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            channel_id: cleanChId,
-                            api_key: key
-                        })
-                    });
-                    const data = await safeParseJson(res);
-                    if (data.success) {
-                        showKeyStatus(`✔ ${data.message || 'Key connected and validated successfully!'}`, true);
-                        geminiApiKeyInput.value = '';
-                        setTimeout(() => {
-                            checkGeminiStatus();
-                            btnSaveGeminiKey.disabled = false;
-                            btnSaveGeminiKey.innerHTML = '<span>⚡ Connect &amp; Validate</span>';
-                        }, 500);
-                    } else {
-                        showKeyStatus('Error: ' + (data.error || 'Failed to validate API key'), false);
+            try {
+                const res = await fetch('/api/gemini/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ api_key: key, model: model })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    geminiKeyStatusMsg.style.display = 'block';
+                    geminiKeyStatusMsg.style.color = '#2ba640';
+                    geminiKeyStatusMsg.textContent = '✔ Key successfully verified and saved!';
+                    setTimeout(() => {
+                        closeKeyModal();
+                        checkGeminiStatus();
                         btnSaveGeminiKey.disabled = false;
-                        btnSaveGeminiKey.innerHTML = '<span>⚡ Connect &amp; Validate</span>';
-                    }
-                } catch (err) {
-                    showKeyStatus('Network error saving key: ' + err.message, false);
+                        btnSaveGeminiKey.innerHTML = '<span>Verify & Save API Key</span>';
+                    }, 900);
+                } else {
+                    geminiKeyStatusMsg.style.display = 'block';
+                    geminiKeyStatusMsg.style.color = '#ff6b6b';
+                    geminiKeyStatusMsg.textContent = 'Error: ' + (data.error || 'Failed to verify key');
                     btnSaveGeminiKey.disabled = false;
-                    btnSaveGeminiKey.innerHTML = '<span>⚡ Connect &amp; Validate</span>';
+                    btnSaveGeminiKey.innerHTML = '<span>Verify & Save API Key</span>';
                 }
-            });
-        }
-
+            } catch (err) {
+                geminiKeyStatusMsg.style.display = 'block';
+                geminiKeyStatusMsg.style.color = '#ff6b6b';
+                geminiKeyStatusMsg.textContent = 'Network error saving key: ' + err.message;
+                btnSaveGeminiKey.disabled = false;
+                btnSaveGeminiKey.innerHTML = '<span>Verify & Save API Key</span>';
+            }
+        });
 
         // Video Target Format State & Switcher
         let currentSelectedFormat = 'Short';
@@ -3227,26 +2267,22 @@ HTML_MAIN = """
         const clientVideo = document.getElementById('clientVideoDecoder');
         const clientCanvas = document.getElementById('clientFrameCanvas');
 
-        if (aiVideoInput) {
-            aiVideoInput.addEventListener('change', (e) => {
-                if (aiVideoInput.files && aiVideoInput.files[0]) {
-                    handleAiVideoSelection(aiVideoInput.files[0]);
-                }
-            });
-        }
+        aiVideoInput.addEventListener('change', (e) => {
+            if (aiVideoInput.files && aiVideoInput.files[0]) {
+                handleAiVideoSelection(aiVideoInput.files[0]);
+            }
+        });
 
-        if (aiVideoDropzone) {
-            aiVideoDropzone.addEventListener('dragover', (e) => { e.preventDefault(); aiVideoDropzone.classList.add('dragover'); });
-            aiVideoDropzone.addEventListener('dragleave', () => { aiVideoDropzone.classList.remove('dragover'); });
-            aiVideoDropzone.addEventListener('drop', (e) => {
-                e.preventDefault();
-                aiVideoDropzone.classList.remove('dragover');
-                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                    if (aiVideoInput) aiVideoInput.files = e.dataTransfer.files;
-                    handleAiVideoSelection(e.dataTransfer.files[0]);
-                }
-            });
-        }
+        aiVideoDropzone.addEventListener('dragover', (e) => { e.preventDefault(); aiVideoDropzone.classList.add('dragover'); });
+        aiVideoDropzone.addEventListener('dragleave', () => { aiVideoDropzone.classList.remove('dragover'); });
+        aiVideoDropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            aiVideoDropzone.classList.remove('dragover');
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                aiVideoInput.files = e.dataTransfer.files;
+                handleAiVideoSelection(e.dataTransfer.files[0]);
+            }
+        });
 
         function handleAiVideoSelection(file) {
             selectedVideoFile = file;
@@ -3265,7 +2301,7 @@ HTML_MAIN = """
             extractClientVideoFrames(file);
         }
 
-        // Extracts 5 high-emotion candidate frames from browser decoder as fallback for Slots 2-6
+        // Extracts high-resolution keyframes directly from video stream
         async function extractClientVideoFrames(file) {
             clientExtractedFrames = [];
             const objectUrl = URL.createObjectURL(file);
@@ -3278,22 +2314,12 @@ HTML_MAIN = """
             const duration = clientVideo.duration || 10;
             const width = clientVideo.videoWidth || 1280;
             const height = clientVideo.videoHeight || 720;
-
-            // Auto-detect aspect ratio directly from native video geometry:
-            // Vertical (9:16) -> Shorts | Horizontal/Custom (16:9) -> Long-Form
-            if (width < height) {
-                selectVideoFormat('Short');
-            } else {
-                selectVideoFormat('Long');
-            }
-
-            const targetAspect = (width < height) ? '9:16' : '16:9';
             clientCanvas.width = width;
             clientCanvas.height = height;
             const ctx = clientCanvas.getContext('2d');
 
-            // Sample 5 high-emotion timestamps across the video for Slots 2 to 6
-            const fractions = [0.14, 0.30, 0.48, 0.66, 0.84];
+            // Sample 6 timestamps across the video (e.g. 8%, 20%, 36%, 52%, 70%, 88%)
+            const fractions = [0.08, 0.20, 0.36, 0.52, 0.70, 0.88];
             const timestamps = fractions.map(f => Math.min(duration - 0.2, Math.max(0.5, duration * f)));
 
             for (let i = 0; i < timestamps.length; i++) {
@@ -3309,19 +2335,18 @@ HTML_MAIN = """
                 const mins = Math.floor(ts / 60);
                 const secs = Math.floor(ts % 60);
                 const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-                const label = `High-Emotion Frame #${i + 1} (${timeStr})`;
+                const label = i === 1 ? 'Primary Character Face' : (i === 3 ? 'Peak Action Scene' : `Authentic Scene (${timeStr})`);
 
-                // Send frame to server to crop to strict 9:16 or 16:9 and store in uploads/thumbnails
+                // Send frame to server to store in uploads/thumbnails
                 try {
                     const fd = new FormData();
                     fd.append('image_file', blob, `frame_${i+1}_${timeStr.replace(':', 'm')}s.jpg`);
                     fd.append('timestamp', timeStr);
                     fd.append('seconds', ts);
                     fd.append('label', label);
-                    fd.append('aspect_ratio', targetAspect);
 
                     const res = await fetch('/api/save_thumbnail_frame', { method: 'POST', body: fd });
-                    const frameData = await safeParseJson(res);
+                    const frameData = await res.json();
                     clientExtractedFrames.push(frameData);
                 } catch (e) {
                     console.error("Frame save error", e);
@@ -3331,346 +2356,65 @@ HTML_MAIN = """
             URL.revokeObjectURL(objectUrl);
         }
 
-        // Ingestion Source Switcher (YouTube Video vs Local File)
-        window.switchIngestSource = function(mode) {
-            const btnYt = document.getElementById('btnIngestSourceYouTube');
-            const btnLoc = document.getElementById('btnIngestSourceLocal');
-            const panelYt = document.getElementById('youtubeIngestPanel');
-            const panelLoc = document.getElementById('localIngestPanel');
-
-            if (mode === 'youtube') {
-                if (btnYt) {
-                    btnYt.style.background = 'linear-gradient(135deg, #a855f7, #ec4899)';
-                    btnYt.style.color = 'white';
-                }
-                if (btnLoc) {
-                    btnLoc.style.background = 'transparent';
-                    btnLoc.style.color = '#a1a1aa';
-                }
-                if (panelYt) panelYt.style.display = 'block';
-                if (panelLoc) panelLoc.style.display = 'none';
-                loadChannelVideosForPicker();
-            } else {
-                if (btnLoc) {
-                    btnLoc.style.background = 'linear-gradient(135deg, #a855f7, #ec4899)';
-                    btnLoc.style.color = 'white';
-                }
-                if (btnYt) {
-                    btnYt.style.background = 'transparent';
-                    btnYt.style.color = '#a1a1aa';
-                }
-                if (panelLoc) panelLoc.style.display = 'block';
-                if (panelYt) panelYt.style.display = 'none';
-            }
-        };
-
-        // Safe JSON parsing helper to completely prevent 'Unexpected end of JSON input'
-        async function safeParseJson(res) {
-            let text = "";
-            try {
-                text = await res.text();
-            } catch (e) {
-                text = "";
-            }
-            let data = null;
-            if (text && text.trim()) {
-                try {
-                    data = JSON.parse(text);
-                } catch (parseErr) {
-                    data = { error: `Server returned non-JSON (HTTP ${res.status}): ${text.substring(0, 150)}` };
-                }
-            } else {
-                data = { error: `Server returned empty response (HTTP ${res.status}).` };
-            }
-            if (!res.ok) {
-                const msg = (data && data.error) ? data.error : `Request failed with HTTP status ${res.status}`;
-                const err = new Error(msg);
-                err.status = res.status;
-                err.data = data;
-                throw err;
-            }
-            return data;
-        }
-
-        window._cachedChannelVideos = window._cachedChannelVideos || {};
-        window._selectedChannelVideoMeta = null;
-
-        // Load channel uploads into picker grid
-        window.loadChannelVideosForPicker = async function() {
-            const grid = document.getElementById('channelVideosPickerGrid');
-            if (!grid) return;
-            try {
-                const res = await fetch('/api/youtube/channel_videos');
-                const videos = await safeParseJson(res);
-                if (!Array.isArray(videos) || videos.length === 0) {
-                    grid.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; grid-column: 1/-1; text-align: center; padding: 12px;">No channel uploads found. Please connect your YouTube account or paste any video URL above.</div>';
-                    return;
-                }
-
-                grid.innerHTML = videos.map(v => {
-                    window._cachedChannelVideos[v.id] = v;
-                    const isPriv = v.is_private_or_unlisted || v.privacy === 'PRIVATE' || v.privacy === 'UNLISTED';
-                    const privBadge = isPriv
-                        ? `<span style="background: rgba(244, 63, 94, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 800;">🔒 ${v.privacy}</span>`
-                        : `<span style="background: rgba(16, 185, 129, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 800;">PUBLIC</span>`;
-                    const durBadge = v.is_short
-                        ? `<span style="background: rgba(168, 85, 247, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 800;">📱 Shorts</span>`
-                        : `<span style="background: rgba(56, 189, 248, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 800;">🎬 ${v.duration_text || 'Long'}</span>`;
-
-                    return `
-                        <div class="video-picker-item" onclick="selectChannelVideoForOptimization(this, '${escapeHtml(v.id)}', ${Boolean(v.is_short)})" style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 8px; padding: 8px; cursor: pointer; transition: all 0.2s; display: flex; flex-direction: column; gap: 6px;">
-                            <div style="position: relative; width: 100%; aspect-ratio: 16/9; border-radius: 6px; overflow: hidden; background: #000;">
-                                <img src="${v.thumbnail || ''}" alt="" style="width: 100%; height: 100%; object-fit: cover;">
-                                <div style="position: absolute; top: 4px; left: 4px; display: flex; gap: 4px;">
-                                    ${privBadge}
-                                </div>
-                                <div style="position: absolute; bottom: 4px; right: 4px;">
-                                    ${durBadge}
-                                </div>
-                            </div>
-                            <div style="font-size: 12px; font-weight: 700; color: #f1f5f9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(v.title)}</div>
-                            <div style="font-size: 11px; color: #a1a1aa; display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
-                                <span style="font-family: monospace;">${escapeHtml(v.id)}</span>
-                                <span style="color: #ec4899; font-weight: 700; text-decoration: underline;">⚡ Select</span>
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-            } catch (e) {
-                grid.innerHTML = `<div style="color: var(--text-muted); font-size: 12px; grid-column: 1/-1; text-align: center; padding: 12px;">Notice: ${e.message}. You can paste any YouTube URL above.</div>`;
-            }
-        };
-
-        window.selectChannelVideoForOptimization = function(cardEl, videoId, isShort) {
-            document.querySelectorAll('.video-picker-item').forEach(el => {
-                el.style.borderColor = 'rgba(168, 85, 247, 0.3)';
-                el.style.boxShadow = 'none';
-            });
-            if (cardEl) {
-                cardEl.style.borderColor = '#ec4899';
-                cardEl.style.boxShadow = '0 0 12px rgba(236, 72, 153, 0.5)';
-            }
-            const input = document.getElementById('ytOptimizeUrlInput');
-            if (input) input.value = `https://youtu.be/${videoId}`;
-            selectVideoFormat(isShort ? 'Short' : 'Long');
-            window._selectedChannelVideoMeta = (window._cachedChannelVideos && window._cachedChannelVideos[videoId]) || null;
-
-            // Automatically check and restore saved pipeline record (Resumable Pipeline)
-            checkAndRestorePipelineRecord(videoId);
-        };
-
-        // Resumable Pipeline Auto-Restore Helper
-        async function checkAndRestorePipelineRecord(videoId) {
-            if (!videoId) return;
-            try {
-                const res = await fetch(`/api/pipeline/record?video_id=${encodeURIComponent(videoId)}`);
-                const data = await safeParseJson(res);
-                if (data && data.success && data.record && data.record.analysis_result) {
-                    const rec = data.record;
-                    currentGeminiData = rec.analysis_result;
-                    renderGeminiResults(rec.analysis_result);
-
-                    // Restore exact pipeline status
-                    if (rec.publish_status === 'published') {
-                        updatePipelineStatus('published');
-                    } else if (rec.youtube_update_status === 'completed') {
-                        updatePipelineStatus('applied');
-                    } else {
-                        updatePipelineStatus('ready_to_apply');
-                    }
-
-                    // Restore thumbnail status
-                    updateThumbnailStatusBadge(rec.thumbnail_status, rec.thumbnail_error);
-                }
-            } catch (e) {
-                console.log("Notice checking pipeline record:", e);
-            }
-        }
-
-        function updateThumbnailStatusBadge(status, errorMsg) {
-            const badge = document.getElementById('thumbnailStageStatus');
-            if (!badge) return;
-            if (status === 'completed') {
-                badge.textContent = '✔ Thumbnail: Complete';
-                badge.style.background = 'rgba(16,185,129,0.2)';
-                badge.style.borderColor = 'rgba(16,185,129,0.5)';
-                badge.style.color = '#34d399';
-            } else if (status === 'manual') {
-                badge.textContent = '✔ Thumbnail: Manually Uploaded';
-                badge.style.background = 'rgba(56,189,248,0.2)';
-                badge.style.borderColor = 'rgba(56,189,248,0.5)';
-                badge.style.color = '#38bdf8';
-            } else if (status === 'generating') {
-                badge.textContent = '🍌 Generating 4K Poster...';
-                badge.style.background = 'rgba(245,158,11,0.2)';
-                badge.style.borderColor = 'rgba(245,158,11,0.5)';
-                badge.style.color = '#fbbf24';
-            } else if (status === 'failed') {
-                const isQuota = errorMsg && (errorMsg.toLowerCase().includes('quota') || errorMsg.includes('429'));
-                badge.textContent = isQuota ? '⚠️ Thumbnail: Quota Exceeded (Optional)' : '❌ Thumbnail: Failed (Optional)';
-                badge.style.background = 'rgba(239,68,68,0.2)';
-                badge.style.borderColor = 'rgba(239,68,68,0.5)';
-                badge.style.color = '#f87171';
-            } else if (status === 'skipped') {
-                badge.textContent = '⏭️ Thumbnail: Skipped';
-                badge.style.background = 'rgba(255,255,255,0.08)';
-                badge.style.borderColor = 'rgba(255,255,255,0.2)';
-                badge.style.color = '#94a3b8';
-            } else {
-                badge.textContent = '⚪ Thumbnail: Pending';
-                badge.style.background = 'rgba(255,255,255,0.08)';
-                badge.style.borderColor = 'rgba(255,255,255,0.2)';
-                badge.style.color = '#cbd5e1';
-            }
-        }
-
-        // Pipeline Status Management
-        function updatePipelineStatus(state, msg) {
-            const badge = document.getElementById('pipelineStatusBadge');
-            if (!badge) return;
-            const states = {
-                'ready': { text: '⚪ Ready to analyze', bg: 'rgba(255,255,255,0.08)', border: 'rgba(255,255,255,0.2)', color: '#cbd5e1' },
-                'analyzing': { text: '🔄 Analyzing...', bg: 'rgba(168,85,247,0.2)', border: 'rgba(168,85,247,0.5)', color: '#d8b4fe' },
-                'complete': { text: '✅ Analysis complete', bg: 'rgba(16,185,129,0.2)', border: 'rgba(16,185,129,0.5)', color: '#4ade80' },
-                'ready_to_apply': { text: '📝 Ready to apply', bg: 'rgba(56,189,248,0.2)', border: 'rgba(56,189,248,0.5)', color: '#38bdf8' },
-                'applied': { text: '✔ Applied to YouTube', bg: 'rgba(16,185,129,0.25)', border: 'rgba(16,185,129,0.6)', color: '#34d399' },
-                'published': { text: '🚀 Published (Public)', bg: 'rgba(236,72,153,0.25)', border: 'rgba(236,72,153,0.6)', color: '#f43f5e' },
-                'error': { text: msg ? `❌ Error: ${msg.substring(0, 32)}` : '❌ Error', bg: 'rgba(239,68,68,0.25)', border: 'rgba(239,68,68,0.6)', color: '#f87171' }
-            };
-            const s = states[state] || states['ready'];
-            badge.textContent = s.text;
-            badge.style.background = s.bg;
-            badge.style.borderColor = s.border;
-            badge.style.color = s.color;
-        }
-
-        // Run YouTube Video Optimization
-        const btnRunYtOptimization = document.getElementById('btnRunYtOptimization');
-        if (btnRunYtOptimization) {
-            btnRunYtOptimization.addEventListener('click', async () => {
-                const urlInput = document.getElementById('ytOptimizeUrlInput');
-                const urlOrId = (urlInput ? urlInput.value : '').trim();
-                if (!urlOrId) {
-                    alert("Please paste a YouTube Video URL / ID or select one from your channel uploads below!");
-                    return;
-                }
-
-                btnRunYtOptimization.disabled = true;
-                const stepsCont = document.getElementById('aiStepsContainer');
-                const resultsBox = document.getElementById('geminiResultsBox');
-                if (stepsCont) stepsCont.style.display = 'block';
-                if (resultsBox) resultsBox.style.display = 'none';
-
-                updatePipelineStatus('analyzing');
-
-                // Update step titles for YouTube optimization
-                const s1 = document.getElementById('step1'); if (s1) { const span = s1.querySelector('span:last-child'); if (span) span.textContent = "Fetching 100% Accurate Spoken Dialogue Subtitles from YouTube"; }
-                const s2 = document.getElementById('step2'); if (s2) { const span = s2.querySelector('span:last-child'); if (span) span.textContent = "Downloading High-Res Reference Frame & Detecting Character Faces"; }
-                const s3 = document.getElementById('step3'); if (s3) { const span = s3.querySelector('span:last-child'); if (span) span.textContent = "Analyzing Video Understanding via Google Gemini Interactions"; }
-                const s4 = document.getElementById('step4'); if (s4) { const span = s4.querySelector('span:last-child'); if (span) span.textContent = "Generating 4K Nano Banana Movie Poster Thumbnail (Slot 1 Default)"; }
-                const s5 = document.getElementById('step5'); if (s5) { const span = s5.querySelector('span:last-child'); if (span) span.textContent = "Finalizing Metadata, Timestamps & Preparing 1-Click Publish"; }
-
-                setStepActive('step1');
-                setTimeout(() => { setStepCompleted('step1'); setStepActive('step2'); }, 1200);
-                setTimeout(() => { setStepCompleted('step2'); setStepActive('step3'); }, 3500);
-                setTimeout(() => { setStepCompleted('step3'); setStepActive('step4'); }, 7500);
-
-                const isForceRefresh = btnRunYtOptimization.dataset.forceRefresh === 'true';
-                btnRunYtOptimization.dataset.forceRefresh = 'false';
-
-                try {
-                    const res = await fetch('/api/gemini/analyze_youtube_video', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            video_id: urlOrId,
-                            format_type: currentSelectedFormat,
-                            instructions: document.getElementById('aiCustomPrompt') ? document.getElementById('aiCustomPrompt').value : '',
-                            existing_meta: window._selectedChannelVideoMeta || null,
-                            force_refresh: isForceRefresh
-                        })
-                    });
-
-                    const metadata = await safeParseJson(res);
-                    currentGeminiData = metadata;
-
-                    setStepCompleted('step4');
-                    setStepActive('step5');
-
-                    setTimeout(() => {
-                        setStepCompleted('step5');
-                        renderGeminiResults(metadata);
-                        btnRunYtOptimization.disabled = false;
-                        updatePipelineStatus('complete');
-                        setTimeout(() => updatePipelineStatus('ready_to_apply'), 800);
-                    }, 500);
-
-                } catch (err) {
-                    updatePipelineStatus('error', err.message);
-                    alert("YouTube Optimization Notice: " + err.message);
-                    btnRunYtOptimization.disabled = false;
-                    if (stepsCont) stepsCont.style.display = 'none';
-                }
-            });
-        }
-
         // Run Gemini Analysis
         const btnRunAiAnalysis = document.getElementById('btnRunAiAnalysis');
         const aiStepsContainer = document.getElementById('aiStepsContainer');
         const geminiResultsBox = document.getElementById('geminiResultsBox');
 
-        if (btnRunAiAnalysis) {
-            btnRunAiAnalysis.addEventListener('click', async () => {
-                if (!selectedVideoFile) {
-                    alert("Please select or drop a video file first!");
-                    return;
+        btnRunAiAnalysis.addEventListener('click', async () => {
+            if (!selectedVideoFile) {
+                alert("Please select or drop a video file first!");
+                return;
+            }
+
+            btnRunAiAnalysis.disabled = true;
+            aiStepsContainer.style.display = 'block';
+            geminiResultsBox.style.display = 'none';
+
+            // Animate steps
+            setStepActive('step1');
+            setTimeout(() => { setStepCompleted('step1'); setStepActive('step2'); }, 1200);
+
+            const formData = new FormData();
+            formData.append('video_file', selectedVideoFile);
+            formData.append('instructions', document.getElementById('aiCustomPrompt').value);
+            formData.append('format_type', currentSelectedFormat);
+
+            // Step 2 & 3
+            setTimeout(() => { setStepCompleted('step2'); setStepActive('step3'); }, 4000);
+            setTimeout(() => { setStepCompleted('step3'); setStepActive('step4'); }, 8500);
+
+            try {
+                const res = await fetch('/api/gemini/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!res.ok) {
+                    const errData = await res.json();
+                    throw new Error(errData.error || "Analysis failed");
                 }
 
-                btnRunAiAnalysis.disabled = true;
-                aiStepsContainer.style.display = 'block';
-                geminiResultsBox.style.display = 'none';
+                setStepCompleted('step4');
+                setStepActive('step5');
 
-                // Animate steps
-                setStepActive('step1');
-                setTimeout(() => { setStepCompleted('step1'); setStepActive('step2'); }, 1200);
+                const metadata = await res.json();
+                currentGeminiData = metadata;
+                tempVideoServerFilename = metadata.video_filename;
+                document.getElementById('existingVideoFilename').value = tempVideoServerFilename;
 
-                const formData = new FormData();
-                formData.append('video_file', selectedVideoFile);
-                formData.append('instructions', document.getElementById('aiCustomPrompt').value);
-                formData.append('format_type', currentSelectedFormat);
-
-                // Step 2 & 3
-                setTimeout(() => { setStepCompleted('step2'); setStepActive('step3'); }, 4000);
-                setTimeout(() => { setStepCompleted('step3'); setStepActive('step4'); }, 8500);
-
-                try {
-                    const res = await fetch('/api/gemini/analyze', {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    const metadata = await safeParseJson(res);
-
-                    setStepCompleted('step4');
-                    setStepActive('step5');
-
-                    currentGeminiData = metadata;
-                    tempVideoServerFilename = metadata.video_filename;
-                    document.getElementById('existingVideoFilename').value = tempVideoServerFilename;
-
-                    setTimeout(() => {
-                        setStepCompleted('step5');
-                        renderGeminiResults(metadata);
-                        btnRunAiAnalysis.disabled = false;
-                    }, 600);
-
-                } catch (err) {
-                    alert("Gemini Analysis Error: " + err.message);
+                setTimeout(() => {
+                    setStepCompleted('step5');
+                    renderGeminiResults(metadata);
                     btnRunAiAnalysis.disabled = false;
-                    aiStepsContainer.style.display = 'none';
-                }
-            });
-        }
+                }, 600);
+
+            } catch (err) {
+                alert("Gemini Analysis Error: " + err.message);
+                btnRunAiAnalysis.disabled = false;
+                aiStepsContainer.style.display = 'none';
+            }
+        });
 
         function setStepActive(id) {
             document.querySelectorAll('.ai-step-item').forEach(el => el.classList.remove('active'));
@@ -3682,51 +2426,30 @@ HTML_MAIN = """
             if (el) { el.classList.remove('active'); el.classList.add('completed'); }
         }
 
-        // Render Gemini Results (Slot 1 4K Nano Banana Thumbnail + Slots 2-6 High-Emotion Local Video Frames)
+        // Render Gemini Results
         function renderGeminiResults(data) {
             geminiResultsBox.style.display = 'block';
 
-            const aspectRatio = data.thumbnail_aspect_ratio || (data.format_type === 'Short' ? '9:16' : '16:9');
-            const isVertical = (aspectRatio === '9:16');
-            selectVideoFormat(isVertical ? 'Short' : 'Long');
-
-            // Target Format, Genre & Primary Context Display
+            // Target Format & Primary Context Display
             const fmtEl = document.getElementById('aiTargetFormatBadge');
-            if (fmtEl) fmtEl.textContent = (isVertical ? `📱 Vertical Shorts (${aspectRatio} • 1080×1920)` : `🎬 Horizontal Long-Form (${aspectRatio} • 1920×1080)`);
-
-            const genreEl = document.getElementById('aiDetectedGenre');
-            if (genreEl) genreEl.textContent = data.detected_genre_emotion || data.detected_genre || 'High-Suspense Cinematic';
-
+            if (fmtEl) fmtEl.textContent = (data.format_type === 'Long' ? '🎬 Long Form Video' : '📱 YouTube Shorts');
             const ctxEl = document.getElementById('aiPrimaryContext');
-            const entitiesStr = Array.isArray(data.true_entities) && data.true_entities.length > 0
-                ? `${data.true_entities.slice(0, 3).join(', ')} • ${data.primary_context || ''}`
-                : (data.primary_context || 'Autonomous Evaluation');
-            if (ctxEl) ctxEl.textContent = entitiesStr;
+            if (ctxEl) ctxEl.textContent = data.primary_context || 'Autonomous Evaluation';
 
-            const audioTrackEl = document.getElementById('aiSpokenAudioTranscript');
-            if (audioTrackEl) {
-                audioTrackEl.textContent = data.spoken_audio_transcript || data.climactic_context || '100% spoken audio & dialogue analyzed.';
-            }
-            const visualTrackEl = document.getElementById('aiVisualTimelineAnalysis');
-            if (visualTrackEl) {
-                visualTrackEl.textContent = data.visual_timeline_analysis || data.plot_twists || data.facial_expression_analysis || 'Key visual frames sampled across timeline.';
-            }
+            // 0. AI Mood & Language Classification
+            const moodEl = document.getElementById('aiDetectedMood');
+            if (moodEl) moodEl.textContent = data.detected_genre_emotion || data.primary_context || 'Entertainment';
+            const langEl = document.getElementById('aiDetectedLang');
+            if (langEl) langEl.textContent = data.detected_language || 'Hindi / Hinglish';
 
-            const ratioBadge = document.getElementById('aiThumbAspectRatioBadge');
-            if (ratioBadge) {
-                ratioBadge.textContent = isVertical
-                    ? '✔ 9:16 Vertical Auto-Detected (1080×1920 4K Poster)'
-                    : '✔ 16:9 Horizontal Auto-Detected (1920×1080 4K Poster)';
-            }
-
-            // 1. Title cards (Viral Title + Alternatives)
+            // 1. Title cards (Viral Title + 2 Alternatives)
             const titleCardsGrid = document.getElementById('titleCardsGrid');
-            const primaryTitle = data.title || data.viral_title || data.primary_title || data.recommended_title || 'Viral Video Hook 🔥';
+            const primaryTitle = data.viral_title || data.primary_title || data.recommended_title || 'Viral Video Hook 🔥';
             const titles = [
-                { text: primaryTitle, tag: (isVertical ? "⭐ High-CTR Suspense Shorts Hook" : "⭐ High-CTR SEO [Hook | Keyword]"), isRec: true },
+                { text: primaryTitle, tag: (data.format_type === 'Long' ? "⭐ Search-Optimized [Hook | Keyword]" : "⭐ High Velocity Short Hook (< 50 Chars)"), isRec: true },
                 ...(data.alternative_titles || []).map((t, i) => ({
                     text: t,
-                    tag: `Alternative High-CTR Option ${i + 1}`,
+                    tag: i === 0 ? "Alternative Catchy Title 1" : "Alternative Catchy Title 2",
                     isRec: false
                 }))
             ];
@@ -3742,55 +2465,25 @@ HTML_MAIN = """
             document.getElementById('videoTitle').value = primaryTitle;
             document.getElementById('titleCounter').textContent = `${primaryTitle.length} / 100`;
 
-            // 2. 4K Nano Banana Thumbnail Suite: Slot 1 (Default Selected) + Slots 2-6 (High-Emotion Local Frames)
+            // 2. Thumbnails Picker & Thumbnail Directive
             const gallery = document.getElementById('thumbnailGalleryGrid');
-            let serverThumbnails = Array.isArray(data.extracted_thumbnails) ? [...data.extracted_thumbnails] : [];
-            if (serverThumbnails.length < 6 && clientExtractedFrames.length > 0) {
-                for (let i = 0; i < clientExtractedFrames.length && serverThumbnails.length < 6; i++) {
-                    const cf = clientExtractedFrames[i];
-                    if (cf && cf.filename && !serverThumbnails.some(st => st.filename === cf.filename)) {
-                        serverThumbnails.push({
-                            ...cf,
-                            slot: serverThumbnails.length + 1,
-                            is_ai_generated: false,
-                            is_recommended: false,
-                            selected: false,
-                            aspect_ratio: aspectRatio
-                        });
-                    }
-                }
-            }
-            const allThumbnails = serverThumbnails.slice(0, 6);
+            const allThumbnails = (clientExtractedFrames.length > 0) ? clientExtractedFrames : (data.extracted_thumbnails || []);
 
             if (allThumbnails.length > 0) {
-                gallery.style.gridTemplateColumns = isVertical
-                    ? 'repeat(auto-fit, minmax(150px, 1fr))'
-                    : 'repeat(auto-fit, minmax(210px, 1fr))';
-
                 gallery.innerHTML = allThumbnails.map((th, idx) => {
-                    const slotNum = th.slot || (idx + 1);
-                    const isSlot1 = (idx === 0 || Boolean(th.is_ai_generated));
-                    const cardAspectCss = isVertical ? '9/16' : '16/9';
-                    const genreBadge = th.genre_preset || data.detected_genre || '4K AI';
-                    const topBadgeHtml = isSlot1
-                        ? `<span class="thumb-ai-rec-badge" style="background: linear-gradient(135deg, #f59e0b, #ec4899, #8b5cf6); box-shadow: 0 2px 10px rgba(236,72,153,0.45);">🍌 SLOT 1: 4K NANO BANANA (${escapeHtml(genreBadge)})</span>`
-                        : `<span class="thumb-ai-rec-badge" style="background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(56, 189, 248, 0.5); color: #38bdf8;">🎬 SLOT ${slotNum}: LOCAL FRAME</span>`;
-                    const bottomBadgeText = isSlot1
-                        ? (th.label || `4K Nano Banana (${aspectRatio})`)
-                        : `${th.timestamp || 'Frame'} • ${th.label || ('High-Emotion #' + (slotNum - 1))}`;
-
+                    const isRec = idx === 0 || th.is_recommended;
                     return `
-                        <div class="thumb-candidate-card ${isSlot1 ? 'selected gemini-best' : ''}" style="aspect-ratio: ${cardAspectCss};" onclick="selectThumbnailFrame(this, '${th.url}', '${th.filename}', '${aspectRatio}')">
-                            <img src="${th.url}" alt="Slot ${slotNum} Thumbnail" style="width: 100%; height: 100%; object-fit: cover;">
-                            ${topBadgeHtml}
-                            <span class="thumb-badge">${escapeHtml(bottomBadgeText)}</span>
+                        <div class="thumb-candidate-card ${isRec ? 'selected gemini-best' : ''}" onclick="selectThumbnailFrame(this, '${th.url}', '${th.filename}')">
+                            <img src="${th.url}" alt="Frame">
+                            ${isRec ? '<span class="thumb-ai-rec-badge">⭐ 100% Authentic Face Match</span>' : ''}
+                            <span class="thumb-badge">${th.timestamp || 'Frame'}</span>
                             <span class="thumb-highlight-badge">✔ Selected</span>
                         </div>
                     `;
                 }).join('');
 
-                // Auto-select Slot 1 (4K Nano Banana Thumbnail) by default
-                selectThumbnailFrame(gallery.firstElementChild, allThumbnails[0].url, allThumbnails[0].filename, aspectRatio);
+                // Select first
+                selectThumbnailFrame(gallery.firstElementChild, allThumbnails[0].url, allThumbnails[0].filename);
             } else {
                 gallery.innerHTML = '<div style="color: var(--text-muted); font-size: 13px;">No thumbnails extracted. You can upload a custom one.</div>';
             }
@@ -3800,7 +2493,7 @@ HTML_MAIN = """
             const overlayEl = document.getElementById('aiThumbOverlayText');
             if (overlayEl) overlayEl.textContent = thumbDir.text_overlay || 'WATCH THIS';
             const sceneEl = document.getElementById('aiThumbSceneDir');
-            if (sceneEl) sceneEl.textContent = thumbDir.visual_scene_direction || 'High emotion close-up frame with dramatic lighting';
+            if (sceneEl) sceneEl.textContent = thumbDir.visual_scene_direction || 'High emotion close-up frame with clear lighting';
             const colorEl = document.getElementById('aiThumbColorTheme');
             if (colorEl) colorEl.textContent = thumbDir.recommended_color_theme || 'High contrast background with bold font';
 
@@ -3834,60 +2527,12 @@ HTML_MAIN = """
             document.getElementById('aiCategoryId').textContent = `Category ID: ${data.category_id || 24}`;
             document.getElementById('categorySelect').value = String(data.category_id || 24);
 
-            document.getElementById('aiVideoTypeBadge').textContent = (data.video_type === 'Short' ? `YouTube Short (${aspectRatio})` : `Long-form Video (${aspectRatio})`);
+            document.getElementById('aiVideoTypeBadge').textContent = (data.video_type === 'Short' ? 'YouTube Short' : 'Long-form Video');
             document.getElementById('aiKidsBadge').textContent = data.made_for_kids ? 'Audience: Made for Kids' : 'Audience: General (Not for kids)';
             document.getElementById('madeForKids').checked = Boolean(data.made_for_kids);
 
-            // 7. Thumbnail Concept Display
-            const thumbConceptEl = document.getElementById('aiThumbConceptDisplay');
-            if (thumbConceptEl) {
-                thumbConceptEl.textContent = data.thumbnail_concept || (data.thumbnail_directive && data.thumbnail_directive.visual_scene_direction) || 'High-contrast cinematic composition based on video context.';
-            }
-
-            // 8. Timestamps / Chapters Display
-            const tsDisplay = document.getElementById('aiTimestampsDisplay');
-            const tsCount = document.getElementById('aiTimestampCount');
-            const timestamps = Array.isArray(data.timestamps) ? data.timestamps : [];
-            if (tsDisplay) {
-                if (timestamps.length > 0) {
-                    tsDisplay.innerHTML = timestamps.map(ts => `
-                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
-                            <span style="background: rgba(168, 85, 247, 0.25); color: #c084fc; font-family: monospace; font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 12px;">${escapeHtml(ts.time)}</span>
-                            <span style="color: #f1f5f9; font-weight: 500;">${escapeHtml(ts.label)}</span>
-                        </div>
-                    `).join('');
-                    if (tsCount) tsCount.textContent = `${timestamps.length} chapters identified`;
-                } else {
-                    tsDisplay.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">No chapter timestamps needed for this video.</span>';
-                    if (tsCount) tsCount.textContent = 'None needed';
-                }
-            }
-
-            // 9. Strategic Insights
-            document.getElementById('aiSummaryInsights').textContent = data.summary_insights || 'Individual video evaluation completed via Gemini Multimodal Models.';
-
-            // Populate Bottom AI Thumbnail Chat Engine with character visual prompt
-            let autoPrompt = data.poster_prompt || data.thumbnail_prompt || (data.thumbnail_directive && data.thumbnail_directive.visual_scene_direction);
-            if (!autoPrompt || autoPrompt.length < 15) {
-                const genre = data.detected_genre || "Cinematic Action";
-                const charContext = data.primary_context || "Main Subject";
-                autoPrompt = `4K cinematic movie poster featuring ${charContext}, intense facial expression with dramatic eye contact, ${genre} atmosphere, high-contrast chiaroscuro shadows, volumetric backlighting, cinematic flying sparks, photorealistic 4K blockbuster grade`;
-            }
-            const promptInput = document.getElementById('bottomThumbPromptInput');
-            if (promptInput) promptInput.value = autoPrompt;
-
-            // Live 4K Preview Box display
-            const bottomPreviewImg = document.getElementById('bottomThumbPreviewImg');
-            const bottomPlaceholder = document.getElementById('bottomThumbPlaceholder');
-            const bottomAttachedBadge = document.getElementById('bottomThumbAttachedBadge');
-            if (allThumbnails.length > 0 && allThumbnails[0] && allThumbnails[0].url) {
-                if (bottomPreviewImg) {
-                    bottomPreviewImg.src = allThumbnails[0].url;
-                    bottomPreviewImg.style.display = 'block';
-                }
-                if (bottomPlaceholder) bottomPlaceholder.style.display = 'none';
-                if (bottomAttachedBadge) bottomAttachedBadge.style.display = 'inline-block';
-            }
+            // 7. Strategic Insights
+            document.getElementById('aiSummaryInsights').textContent = data.summary_insights || 'Individual video evaluation completed via Gemini 2.5 Flash.';
 
             // Scroll to results smoothly
             geminiResultsBox.scrollIntoView({ behavior: 'smooth' });
@@ -3905,7 +2550,7 @@ HTML_MAIN = """
             document.getElementById('titleCounter').textContent = `${text.length} / 100`;
         }
 
-        function selectThumbnailFrame(card, url, filename, aspectRatio) {
+        function selectThumbnailFrame(card, url, filename) {
             if (!card) return;
             document.querySelectorAll('.thumb-candidate-card').forEach(c => c.classList.remove('selected'));
             card.classList.add('selected');
@@ -3914,454 +2559,45 @@ HTML_MAIN = """
             document.getElementById('selectedThumbnailFilename').value = filename;
 
             // Update preview box in manual studio
-            const thumbPreviewBox = document.getElementById('thumbPreviewBox');
             const thumbPreviewImg = document.getElementById('thumbPreviewImg');
             const thumbPlaceholder = document.getElementById('thumbPlaceholder');
-            if (thumbPreviewBox && aspectRatio) {
-                thumbPreviewBox.style.aspectRatio = (aspectRatio === '9:16') ? '9/16' : '16/9';
-                thumbPreviewBox.style.maxWidth = (aspectRatio === '9:16') ? '220px' : '100%';
-                thumbPreviewBox.style.margin = (aspectRatio === '9:16') ? '10px auto 0 auto' : '10px 0 0 0';
-            }
             thumbPreviewImg.src = url;
             thumbPreviewImg.style.display = 'block';
             thumbPlaceholder.style.display = 'none';
         }
 
         // Auto-Populate Form Button
-        const btnPopulateToManual = document.getElementById('btnPopulateToManual');
-        if (btnPopulateToManual) {
-            btnPopulateToManual.addEventListener('click', () => {
-                window.switchWorkspaceTab('manual');
-                const manualStudioSection = document.getElementById('manualStudioSection');
-                if (manualStudioSection) manualStudioSection.scrollIntoView({ behavior: 'smooth' });
-            });
-        }
+        document.getElementById('btnPopulateToManual').addEventListener('click', () => {
+            tabManualMode.click();
+            manualStudioSection.scrollIntoView({ behavior: 'smooth' });
+        });
 
-        // Re-Analyze Button (Force Refresh)
-        const btnReAnalyzeYtVideo = document.getElementById('btnReAnalyzeYtVideo');
-        if (btnReAnalyzeYtVideo) {
-            btnReAnalyzeYtVideo.addEventListener('click', () => {
-                if (btnRunYtOptimization) {
-                    btnRunYtOptimization.dataset.forceRefresh = 'true';
-                    btnRunYtOptimization.click();
-                }
-            });
-        }
-
-        // Dedicated Bottom AI Thumbnail Chat Assistant Listener
-        const btnBottomGenerateThumb = document.getElementById('btnBottomGenerateThumb');
-        if (btnBottomGenerateThumb) {
-            btnBottomGenerateThumb.addEventListener('click', async () => {
-                if (!currentGeminiData || !currentGeminiData.video_id) {
-                    alert("Please select and analyze a video first.");
-                    return;
-                }
-                const promptVal = (document.getElementById('bottomThumbPromptInput') ? document.getElementById('bottomThumbPromptInput').value.trim() : '');
-                btnBottomGenerateThumb.disabled = true;
-                const originalHtml = btnBottomGenerateThumb.innerHTML;
-                btnBottomGenerateThumb.innerHTML = `<span class="spinner" style="width:14px;height:14px;"></span> Generating 4K Thumbnail...`;
-
-                const countdownEl = document.getElementById('thumbAutoInjectCountdown');
-                const countdownText = document.getElementById('countdownText');
-                const attachedBadge = document.getElementById('bottomThumbAttachedBadge');
-                if (countdownEl) countdownEl.style.display = 'none';
-                if (attachedBadge) attachedBadge.style.display = 'none';
-
-                try {
-                    const res = await fetch('/api/pipeline/generate_thumbnail', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            video_id: currentGeminiData.video_id,
-                            prompt: promptVal,
-                            aspect_ratio: currentGeminiData.thumbnail_aspect_ratio || '16:9',
-                            format_type: currentGeminiData.format_type || 'Long'
-                        })
-                    });
-                    const respData = await safeParseJson(res);
-                    if (!respData.success || !respData.thumbnail) {
-                        throw new Error(respData.error || "Failed to generate thumbnail");
-                    }
-
-                    const newThumb = respData.thumbnail;
-                    // Immediately display 4K image in preview box
-                    const previewImg = document.getElementById('bottomThumbPreviewImg');
-                    const placeholder = document.getElementById('bottomThumbPlaceholder');
-                    if (previewImg) {
-                        previewImg.src = newThumb.url;
-                        previewImg.style.display = 'block';
-                    }
-                    if (placeholder) placeholder.style.display = 'none';
-
-                    // Start 2-second auto-injection countdown
-                    if (countdownEl && countdownText) {
-                        countdownEl.style.display = 'inline-flex';
-                        countdownText.textContent = 'Auto-attaching to Slot 1 in 2s...';
-                    }
-
-                    setTimeout(() => {
-                        // 2-second automatic injection into thumbnail slot
-                        selectedThumbnailFilename = newThumb.filename;
-                        const hiddenInput = document.getElementById('selectedThumbnailFilename');
-                        if (hiddenInput) hiddenInput.value = selectedThumbnailFilename;
-
-                        // Update gallery Slot 1 card
-                        const slot1Card = document.querySelector('.thumb-candidate-card');
-                        if (slot1Card) {
-                            document.querySelectorAll('.thumb-candidate-card').forEach(c => c.classList.remove('selected'));
-                            slot1Card.classList.add('selected');
-                            const img = slot1Card.querySelector('img');
-                            if (img) img.src = newThumb.url;
-                        }
-
-                        // Visual confirmation
-                        if (countdownEl) countdownEl.style.display = 'none';
-                        if (attachedBadge) attachedBadge.style.display = 'inline-block';
-                        const previewBox = document.getElementById('bottomThumbPreviewContainer');
-                        if (previewBox) previewBox.style.borderColor = '#10b981';
-
-                        const stageStatus = document.getElementById('thumbnailStageStatus');
-                        if (stageStatus) {
-                            stageStatus.textContent = '✔ Slot 1 Attached (Ready for 1-Click Publishing)';
-                            stageStatus.style.color = '#34d399';
-                            stageStatus.style.borderColor = '#10b981';
-                        }
-                    }, 2000);
-
-                } catch (err) {
-                    alert("Thumbnail Generation Notice: " + err.message);
-                } finally {
-                    btnBottomGenerateThumb.disabled = false;
-                    btnBottomGenerateThumb.innerHTML = originalHtml;
-                }
-            });
-        }
-
-        // Dedicated Independent Thumbnail Actions
-        const btnGenerateThumbnail = document.getElementById('btnGenerateThumbnail');
-        const btnUploadThumbnailManual = document.getElementById('btnUploadThumbnailManual');
-        const manualThumbFileInput = document.getElementById('manualThumbFileInput');
-        const btnSkipThumbnail = document.getElementById('btnSkipThumbnail');
-
-        if (btnGenerateThumbnail) {
-            btnGenerateThumbnail.addEventListener('click', async () => {
-                if (!currentGeminiData || !currentGeminiData.video_id) {
-                    alert("Please select and analyze a video first.");
-                    return;
-                }
-                const vid = currentGeminiData.video_id;
-                btnGenerateThumbnail.disabled = true;
-                const origHtml = btnGenerateThumbnail.innerHTML;
-                btnGenerateThumbnail.innerHTML = `<span class="spinner" style="width:14px;height:14px;"></span> Generating 4K Poster...`;
-                updateThumbnailStatusBadge('generating');
-
-                try {
-                    const res = await fetch('/api/pipeline/generate_thumbnail', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            video_id: vid,
-                            aspect_ratio: currentGeminiData.thumbnail_aspect_ratio || '16:9',
-                            format_type: currentGeminiData.format_type || 'Long'
-                        })
-                    });
-                    const data = await safeParseJson(res);
-                    if (data && data.success && data.thumbnail) {
-                        const th = data.thumbnail;
-                        updateThumbnailStatusBadge('completed');
-                        // Prepend or select in gallery
-                        selectThumbnailFrame(null, th.url, th.filename, th.aspect_ratio);
-                        alert("🎉 4K Nano Banana Movie Poster Thumbnail generated successfully!");
-                    } else {
-                        const errMsg = (data && data.error) || "Generation failed";
-                        updateThumbnailStatusBadge('failed', errMsg);
-                        alert(`Thumbnail Notice: ${errMsg}\n\nNote: Metadata is complete! You can upload a thumbnail manually or skip.`);
-                    }
-                } catch (err) {
-                    updateThumbnailStatusBadge('failed', err.message);
-                    alert(`Thumbnail Notice: ${err.message}\n\nNote: Metadata is complete! You can upload a thumbnail manually or skip.`);
-                } finally {
-                    btnGenerateThumbnail.disabled = false;
-                    btnGenerateThumbnail.innerHTML = origHtml;
-                }
-            });
-        }
-
-        if (btnUploadThumbnailManual && manualThumbFileInput) {
-            btnUploadThumbnailManual.addEventListener('click', () => {
-                if (!currentGeminiData || !currentGeminiData.video_id) {
-                    alert("Please select and analyze a video first.");
-                    return;
-                }
-                manualThumbFileInput.click();
-            });
-
-            manualThumbFileInput.addEventListener('change', async () => {
-                const file = manualThumbFileInput.files[0];
-                if (!file || !currentGeminiData || !currentGeminiData.video_id) return;
-
-                const formData = new FormData();
-                formData.append('video_id', currentGeminiData.video_id);
-                formData.append('thumbnail_file', file);
-
-                updateThumbnailStatusBadge('generating');
-                try {
-                    const res = await fetch('/api/pipeline/upload_thumbnail', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const data = await safeParseJson(res);
-                    if (data && data.success && data.thumbnail) {
-                        updateThumbnailStatusBadge('manual');
-                        selectThumbnailFrame(null, data.thumbnail.url, data.thumbnail.filename, currentGeminiData.thumbnail_aspect_ratio || '16:9');
-                        alert("✔ Custom thumbnail uploaded successfully!");
-                    } else {
-                        throw new Error((data && data.error) || "Upload failed");
-                    }
-                } catch (e) {
-                    updateThumbnailStatusBadge('failed', e.message);
-                    alert("Upload Error: " + e.message);
-                }
-            });
-        }
-
-        if (btnSkipThumbnail) {
-            btnSkipThumbnail.addEventListener('click', async () => {
-                if (!currentGeminiData || !currentGeminiData.video_id) {
-                    alert("Please select and analyze a video first.");
-                    return;
-                }
-                try {
-                    await fetch('/api/pipeline/skip_thumbnail', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ video_id: currentGeminiData.video_id })
-                    });
-                    updateThumbnailStatusBadge('skipped');
-                    alert("⏭️ Thumbnail stage skipped. You can proceed directly to Apply All or Publish Public.");
-                } catch (e) {
-                    console.log("Skip notice:", e);
-                }
-            });
-        }
-
-        // 1. Separate Action: Apply Changes to YouTube (Preserves Privacy)
-        const btnApplyMetadata = document.getElementById('btnApplyMetadata');
-        if (btnApplyMetadata) {
-            btnApplyMetadata.addEventListener('click', async () => {
-                if (!currentGeminiData || !currentGeminiData.video_id) {
-                    alert("Please analyze a YouTube video first before applying changes.");
-                    return;
-                }
-
-                btnApplyMetadata.disabled = true;
-                const originalHtml = btnApplyMetadata.innerHTML;
-                btnApplyMetadata.innerHTML = `<span class="spinner" style="width:16px;height:16px;"></span> Applying...`;
-                updatePipelineStatus('analyzing');
-
-                try {
-                    const payload = {
-                        action: 'apply',
-                        privacy: 'preserve',
-                        video_id: currentGeminiData.video_id,
-                        title: document.getElementById('videoTitle').value,
-                        description: document.getElementById('videoDesc').value,
-                        tags: window.tags || [],
-                        category_id: document.getElementById('categorySelect').value,
-                        made_for_kids: document.getElementById('madeForKids').checked,
-                        thumbnail_filename: selectedThumbnailFilename
-                    };
-
-                    const res = await fetch('/api/youtube/publish_optimized_video', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-
-                    const data = await safeParseJson(res);
-                    if (!data.success) {
-                        throw new Error(data.error || "Failed to apply changes");
-                    }
-
-                    updatePipelineStatus('applied');
-                    btnApplyMetadata.innerHTML = `✔ Changes Saved (Privacy Preserved)`;
-                    btnApplyMetadata.style.borderColor = '#10b981';
-                    btnApplyMetadata.style.color = '#10b981';
-                    if (data.thumbnail_notice) {
-                        const warnBanner = document.getElementById('thumbVerificationWarningBanner');
-                        if (warnBanner) {
-                            warnBanner.style.display = 'flex';
-                            warnBanner.scrollIntoView({ behavior: 'smooth' });
-                        }
-                        alert(`⚠️ YouTube Phone Verification Required to set custom thumbnails (youtube.com/verify).\n\nAll other metadata and video settings were saved successfully!`);
-                    } else {
-                        alert(`✅ Metadata successfully applied to YouTube!\n\nVideo: ${currentGeminiData.video_id}\nPrivacy status has been preserved (${currentGeminiData.privacy_status || 'current'}).\n${data.thumbnail_updated ? 'Thumbnail updated!' : ''}`);
-                    }
-                } catch (err) {
-                    updatePipelineStatus('error', err.message);
-                    alert("Apply Error: " + err.message);
-                    btnApplyMetadata.disabled = false;
-                    btnApplyMetadata.innerHTML = originalHtml;
-                }
-            });
-        }
-
-        // 2. Separate Action: Publish Public with Explicit Confirmation Modal
-        const btnPublishPublic = document.getElementById('btnPublishPublic');
-        const publishConfirmModal = document.getElementById('publishConfirmModal');
-        const btnConfirmGoPublic = document.getElementById('btnConfirmGoPublic');
-
-        window.closePublishConfirmModal = function() {
-            if (publishConfirmModal) {
-                publishConfirmModal.style.display = 'none';
-            }
-        };
-
-        if (btnPublishPublic) {
-            btnPublishPublic.addEventListener('click', () => {
-                if (currentGeminiData && currentGeminiData.is_youtube_video) {
-                    // Populate modal fields
-                    const vidEl = document.getElementById('modalVideoId');
-                    if (vidEl) vidEl.textContent = currentGeminiData.video_id;
-                    const visEl = document.getElementById('modalVisibilityChange');
-                    if (visEl) visEl.textContent = `${currentGeminiData.privacy_status || 'PRIVATE'} ➔ PUBLIC`;
-                    const catEl = document.getElementById('modalCategory');
-                    if (catEl) catEl.textContent = `${document.getElementById('aiCategoryName').textContent} (ID: ${document.getElementById('categorySelect').value})`;
-                    const thEl = document.getElementById('modalThumbnailStatus');
-                    if (thEl) thEl.textContent = selectedThumbnailFilename ? `Attached (${selectedThumbnailFilename})` : 'Preserve current thumbnail';
-                    const tEl = document.getElementById('modalFinalTitle');
-                    if (tEl) tEl.textContent = document.getElementById('videoTitle').value;
-
-                    if (publishConfirmModal) {
-                        publishConfirmModal.style.display = 'flex';
-                    }
-                    return;
-                }
-
-                // Fallback for local files
-                window.switchWorkspaceTab('manual');
-                const form = document.getElementById('uploadForm');
-                if (form) form.dispatchEvent(new Event('submit'));
-            });
-        }
-
-        if (btnConfirmGoPublic) {
-            btnConfirmGoPublic.addEventListener('click', async () => {
-                window.closePublishConfirmModal();
-                if (!currentGeminiData || !currentGeminiData.video_id) return;
-
-                btnPublishPublic.disabled = true;
-                const originalHtml = btnPublishPublic.innerHTML;
-                btnPublishPublic.innerHTML = `<span class="spinner" style="width:16px;height:16px;"></span> Publishing Public...`;
-                updatePipelineStatus('analyzing');
-
-                try {
-                    const payload = {
-                        action: 'publish',
-                        privacy: 'public',
-                        video_id: currentGeminiData.video_id,
-                        title: document.getElementById('videoTitle').value,
-                        description: document.getElementById('videoDesc').value,
-                        tags: window.tags || [],
-                        category_id: document.getElementById('categorySelect').value,
-                        made_for_kids: document.getElementById('madeForKids').checked,
-                        thumbnail_filename: selectedThumbnailFilename
-                    };
-
-                    const res = await fetch('/api/youtube/publish_optimized_video', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-
-                    const data = await safeParseJson(res);
-                    if (!data.success) {
-                        throw new Error(data.error || "Publish failed");
-                    }
-
-                    updatePipelineStatus('published');
-                    btnPublishPublic.innerHTML = `✔ Live on YouTube (Public)`;
-                    btnPublishPublic.style.background = '#10b981';
-                    if (data.thumbnail_notice) {
-                        const warnBanner = document.getElementById('thumbVerificationWarningBanner');
-                        if (warnBanner) {
-                            warnBanner.style.display = 'flex';
-                            warnBanner.scrollIntoView({ behavior: 'smooth' });
-                        }
-                        alert(`🎉 Video Published Public!\n\nLink: ${data.video_url}\n\n⚠️ YouTube Phone Verification Required to set custom thumbnails (youtube.com/verify).`);
-                    } else {
-                        alert(`🎉 SUCCESS!\n\nVideo ${currentGeminiData.video_id} has been published PUBLIC on YouTube!\n\nLink: ${data.video_url}\n${data.thumbnail_updated ? 'Thumbnail updated!' : ''}`);
-                    }
-                    window.open(data.video_url, '_blank');
-                } catch (err) {
-                    updatePipelineStatus('error', err.message);
-                    alert("Publish Error: " + err.message);
-                    btnPublishPublic.disabled = false;
-                    btnPublishPublic.innerHTML = originalHtml;
-                }
-            });
-        }
+        // One-Click Auto-Publish Button
+        document.getElementById('btnOneClickPublish').addEventListener('click', () => {
+            tabManualMode.click();
+            document.getElementById('uploadForm').dispatchEvent(new Event('submit'));
+        });
 
         // Chat Drawer Toggle
         const chatFabBtn = document.getElementById('chatFabBtn');
-        const chatDrawer = document.getElementById('chatDrawer') || window._detachedModals['chatDrawer'];
-        if (chatDrawer) window._detachedModals['chatDrawer'] = chatDrawer;
+        const chatDrawer = document.getElementById('chatDrawer');
         const btnCloseChat = document.getElementById('btnCloseChat');
         const chatInput = document.getElementById('chatInput');
         const btnSendChat = document.getElementById('btnSendChat');
         const chatMessages = document.getElementById('chatMessages');
 
-        function closeChatDrawerHard() {
-            const drawerEl = chatDrawer || window._detachedModals['chatDrawer'];
-            if (drawerEl) {
-                drawerEl.classList.remove('open');
-                drawerEl.style.display = 'none';
-                drawerEl.style.pointerEvents = 'none';
-                drawerEl.style.opacity = '0';
-                drawerEl.style.visibility = 'hidden';
-                drawerEl.style.zIndex = '-99999';
-                if (drawerEl.parentNode) {
-                    drawerEl.parentNode.removeChild(drawerEl);
-                }
-            }
-        }
-
-        if (chatFabBtn && chatDrawer) {
-            chatFabBtn.addEventListener('click', () => {
-                const drawerEl = chatDrawer || window._detachedModals['chatDrawer'];
-                if (!drawerEl) return;
-                const willOpen = !drawerEl.classList.contains('open');
-                if (willOpen) {
-                    if (!document.body.contains(drawerEl)) {
-                        document.body.appendChild(drawerEl);
-                    }
-                    drawerEl.classList.add('open');
-                    drawerEl.style.display = 'flex';
-                    drawerEl.style.pointerEvents = 'auto';
-                    drawerEl.style.opacity = '1';
-                    drawerEl.style.visibility = 'visible';
-                    drawerEl.style.width = '380px';
-                    drawerEl.style.height = 'calc(100vh - 64px)';
-                    drawerEl.style.zIndex = '1001';
-                } else {
-                    closeChatDrawerHard();
-                }
-            });
-        }
-        if (btnCloseChat && chatDrawer) {
-            btnCloseChat.addEventListener('click', closeChatDrawerHard);
-        }
+        chatFabBtn.addEventListener('click', () => chatDrawer.classList.toggle('open'));
+        btnCloseChat.addEventListener('click', () => chatDrawer.classList.remove('open'));
 
         async function sendChatMessage(text) {
-            if (!text || !text.trim()) return;
-            if (!chatMessages) return;
+            if (!text.trim()) return;
             
             // Add user message
             const userMsg = document.createElement('div');
             userMsg.className = 'chat-msg chat-msg-user';
             userMsg.textContent = text;
             chatMessages.appendChild(userMsg);
-            if (chatInput) chatInput.value = '';
+            chatInput.value = '';
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
             // Loading message
@@ -4372,22 +2608,19 @@ HTML_MAIN = """
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
             try {
-                const titleVal = document.getElementById('videoTitle') ? document.getElementById('videoTitle').value : '';
-                const catVal = document.getElementById('categorySelect') ? document.getElementById('categorySelect').value : '';
-                const privVal = document.getElementById('privacySelect') ? document.getElementById('privacySelect').value : '';
                 const res = await fetch('/api/gemini/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         message: text,
                         context: {
-                            title: titleVal,
-                            category: catVal,
-                            privacy: privVal
+                            title: document.getElementById('videoTitle').value,
+                            category: document.getElementById('categorySelect').value,
+                            privacy: document.getElementById('privacySelect').value
                         }
                     })
                 });
-                const data = await safeParseJson(res);
+                const data = await res.json();
                 
                 aiMsg.innerHTML = escapeHtml(data.reply).replace(/\\n/g, '<br>');
 
@@ -4396,10 +2629,8 @@ HTML_MAIN = """
                     btn.className = 'chat-apply-btn';
                     btn.textContent = '✔ Apply Title to Studio';
                     btn.onclick = () => {
-                        const vt = document.getElementById('videoTitle');
-                        if (vt) vt.value = data.suggested_title;
-                        const tc = document.getElementById('titleCounter');
-                        if (tc) tc.textContent = `${data.suggested_title.length} / 100`;
+                        document.getElementById('videoTitle').value = data.suggested_title;
+                        document.getElementById('titleCounter').textContent = `${data.suggested_title.length} / 100`;
                         alert("Title applied to Studio!");
                     };
                     aiMsg.appendChild(document.createElement('br'));
@@ -4411,10 +2642,8 @@ HTML_MAIN = """
                     btn.className = 'chat-apply-btn';
                     btn.textContent = '✔ Apply Description to Studio';
                     btn.onclick = () => {
-                        const vd = document.getElementById('videoDesc');
-                        if (vd) vd.value = data.suggested_description;
-                        const dc = document.getElementById('descCounter');
-                        if (dc) dc.textContent = `${data.suggested_description.length} / 5000`;
+                        document.getElementById('videoDesc').value = data.suggested_description;
+                        document.getElementById('descCounter').textContent = `${data.suggested_description.length} / 5000`;
                         alert("Description applied to Studio!");
                     };
                     aiMsg.appendChild(document.createElement('br'));
@@ -4424,23 +2653,16 @@ HTML_MAIN = """
             } catch (err) {
                 aiMsg.textContent = "Error: " + err.message;
             }
-            if (chatMessages) chatMessages.scrollTop = chatMessages.scrollHeight;
+            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
-        if (btnSendChat && chatInput) {
-            btnSendChat.addEventListener('click', () => sendChatMessage(chatInput.value));
-        }
-        if (chatInput) {
-            chatInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') sendChatMessage(chatInput.value);
-            });
-        }
+        btnSendChat.addEventListener('click', () => sendChatMessage(chatInput.value));
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') sendChatMessage(chatInput.value);
+        });
 
         function sendQuickPrompt(promptText) {
-            if (chatDrawer) {
-                chatDrawer.classList.add('open');
-                chatDrawer.style.pointerEvents = 'auto';
-            }
+            chatDrawer.classList.add('open');
             sendChatMessage(promptText);
         }
 
@@ -4449,23 +2671,19 @@ HTML_MAIN = """
         // ==============================================
         const titleInput = document.getElementById('videoTitle');
         const titleCounter = document.getElementById('titleCounter');
-        if (titleInput && titleCounter) {
-            titleInput.addEventListener('input', () => {
-                const len = titleInput.value.length;
-                titleCounter.textContent = `${len} / 100`;
-                titleCounter.className = 'char-counter ' + (len > 90 ? 'limit-hit' : (len > 75 ? 'limit-near' : ''));
-            });
-        }
+        titleInput.addEventListener('input', () => {
+            const len = titleInput.value.length;
+            titleCounter.textContent = `${len} / 100`;
+            titleCounter.className = 'char-counter ' + (len > 90 ? 'limit-hit' : (len > 75 ? 'limit-near' : ''));
+        });
 
         const descInput = document.getElementById('videoDesc');
         const descCounter = document.getElementById('descCounter');
-        if (descInput && descCounter) {
-            descInput.addEventListener('input', () => {
-                const len = descInput.value.length;
-                descCounter.textContent = `${len} / 5000`;
-                descCounter.className = 'char-counter ' + (len > 4800 ? 'limit-hit' : (len > 4000 ? 'limit-near' : ''));
-            });
-        }
+        descInput.addEventListener('input', () => {
+            const len = descInput.value.length;
+            descCounter.textContent = `${len} / 5000`;
+            descCounter.className = 'char-counter ' + (len > 4800 ? 'limit-hit' : (len > 4000 ? 'limit-near' : ''));
+        });
 
         // Tags chips management
         window.tags = [];
@@ -4474,8 +2692,7 @@ HTML_MAIN = """
         const hiddenTags = document.getElementById('hiddenTags');
 
         function updateTags() {
-            if (hiddenTags) hiddenTags.value = window.tags.join(',');
-            if (!tagsWrapper) return;
+            hiddenTags.value = window.tags.join(',');
             const existingChips = tagsWrapper.querySelectorAll('.tag-chip');
             existingChips.forEach(c => c.remove());
 
@@ -4483,228 +2700,111 @@ HTML_MAIN = """
                 const chip = document.createElement('div');
                 chip.className = 'tag-chip';
                 chip.innerHTML = `<span>${tag}</span><span class="remove-tag" data-index="${idx}">&times;</span>`;
-                if (tagInput) tagsWrapper.insertBefore(chip, tagInput);
-                else tagsWrapper.appendChild(chip);
+                tagsWrapper.insertBefore(chip, tagInput);
             });
         }
 
-        if (tagInput) {
-            tagInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ',') {
-                    e.preventDefault();
-                    const val = tagInput.value.trim().replace(/^,+|,+$/g, '');
-                    if (val && !window.tags.includes(val)) {
-                        window.tags.push(val);
-                        updateTags();
-                    }
-                    tagInput.value = '';
-                } else if (e.key === 'Backspace' && tagInput.value === '' && window.tags.length > 0) {
-                    window.tags.pop();
+        tagInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                const val = tagInput.value.trim().replace(/^,+|,+$/g, '');
+                if (val && !window.tags.includes(val)) {
+                    window.tags.push(val);
                     updateTags();
                 }
-            });
-        }
+                tagInput.value = '';
+            } else if (e.key === 'Backspace' && tagInput.value === '' && window.tags.length > 0) {
+                window.tags.pop();
+                updateTags();
+            }
+        });
 
-        if (tagsWrapper) {
-            tagsWrapper.addEventListener('click', (e) => {
-                if (e.target.classList.contains('remove-tag')) {
-                    const idx = parseInt(e.target.dataset.index);
-                    window.tags.splice(idx, 1);
-                    updateTags();
-                }
-            });
-        }
+        tagsWrapper.addEventListener('click', (e) => {
+            if (e.target.classList.contains('remove-tag')) {
+                const idx = parseInt(e.target.dataset.index);
+                window.tags.splice(idx, 1);
+                updateTags();
+            }
+        });
 
         // Manual File inputs
         const videoInput = document.getElementById('videoFileInput');
         const videoFileInfo = document.getElementById('videoFileInfo');
-        if (videoInput) {
-            videoInput.addEventListener('change', () => {
-                if (videoInput.files && videoInput.files[0]) {
-                    const file = videoInput.files[0];
-                    const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
-                    if (videoFileInfo) {
-                        videoFileInfo.textContent = `Selected: ${file.name} (${sizeMb} MB)`;
-                        videoFileInfo.style.display = 'block';
-                    }
-                    if (titleInput && !titleInput.value) {
-                        titleInput.value = file.name.replace(/\\.[^/.]+$/, "");
-                        titleInput.dispatchEvent(new Event('input'));
-                    }
+        videoInput.addEventListener('change', () => {
+            if (videoInput.files && videoInput.files[0]) {
+                const file = videoInput.files[0];
+                const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+                videoFileInfo.textContent = `Selected: ${file.name} (${sizeMb} MB)`;
+                videoFileInfo.style.display = 'block';
+                if (!titleInput.value) {
+                    titleInput.value = file.name.replace(/\\.[^/.]+$/, "");
+                    titleInput.dispatchEvent(new Event('input'));
                 }
-            });
-        }
+            }
+        });
 
         const thumbInput = document.getElementById('thumbFileInput');
         const thumbPreviewImg = document.getElementById('thumbPreviewImg');
         const thumbPlaceholder = document.getElementById('thumbPlaceholder');
 
-        if (thumbInput) {
-            thumbInput.addEventListener('change', () => {
-                if (thumbInput.files && thumbInput.files[0]) {
-                    const file = thumbInput.files[0];
-                    const reader = new FileReader();
-                    reader.onload = (e) => {
-                        if (thumbPreviewImg) {
-                            thumbPreviewImg.src = e.target.result;
-                            thumbPreviewImg.style.display = 'block';
-                        }
-                        if (thumbPlaceholder) {
-                            thumbPlaceholder.style.display = 'none';
-                        }
-                        const selTh = document.getElementById('selectedThumbnailFilename');
-                        if (selTh) selTh.value = '';
-                    };
-                    reader.readAsDataURL(file);
-                }
-            });
-        }
+        thumbInput.addEventListener('change', () => {
+            if (thumbInput.files && thumbInput.files[0]) {
+                const file = thumbInput.files[0];
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    thumbPreviewImg.src = e.target.result;
+                    thumbPreviewImg.style.display = 'block';
+                    thumbPlaceholder.style.display = 'none';
+                    document.getElementById('selectedThumbnailFilename').value = '';
+                };
+                reader.readAsDataURL(file);
+            }
+        });
 
-        // Channel Info & Multi-Channel Switcher with Instant Local Cache
-        function renderChannelProfileData(data) {
-            if (!data) return;
+        // Channel Info & Multi-Channel Switcher
+        async function loadChannelInfo() {
             try {
-                if (data.title) {
-                    const cTitle = document.getElementById('channelTitle');
-                    if (cTitle) cTitle.textContent = data.title;
-                    const uName = document.getElementById('userName');
-                    if (uName) uName.textContent = data.title;
-                }
-                if (data.customUrl || data.title) {
-                    const handle = document.getElementById('channelHandle');
-                    if (handle) handle.textContent = data.customUrl || ('@' + data.title.toLowerCase().replace(/\\s+/g, ''));
-                }
-
-                // Render channel profile picture (snippet.thumbnails.default.url or medium/high)
-                const avatarUrl = data.thumbnail_url || data.avatar;
-                if (avatarUrl) {
-                    const avatarLarge = document.getElementById('channelAvatarLarge');
-                    if (avatarLarge) {
-                        avatarLarge.src = avatarUrl;
-                        avatarLarge.alt = data.title || "Channel Profile";
-                    }
-                    const userAvatar = document.getElementById('userAvatar');
-                    if (userAvatar) {
-                        userAvatar.src = avatarUrl;
-                        userAvatar.alt = data.title || "User Avatar";
-                    }
+                const res = await fetch('/api/channel');
+                if (!res.ok) throw new Error("Failed to load channel details");
+                const data = await res.json();
+                
+                document.getElementById('channelTitle').textContent = data.title;
+                document.getElementById('userName').textContent = data.title;
+                document.getElementById('channelHandle').textContent = data.customUrl || '@' + data.title.toLowerCase().replace(/\\s+/g, '');
+                if (data.avatar) {
+                    document.getElementById('channelAvatarLarge').src = data.avatar;
+                    document.getElementById('userAvatar').src = data.avatar;
                     const dropAvatar = document.getElementById('dropAvatar');
-                    if (dropAvatar) {
-                        dropAvatar.src = avatarUrl;
-                        dropAvatar.alt = data.title || "Profile";
-                    }
+                    if (dropAvatar) dropAvatar.src = data.avatar;
                 }
                 const dropName = document.getElementById('dropChannelName');
-                if (dropName && data.title) dropName.textContent = data.title;
+                if (dropName) dropName.textContent = data.title;
                 const dropEmail = document.getElementById('dropUserEmail');
                 if (dropEmail && data.userEmail) dropEmail.textContent = data.userEmail;
 
-                const statSubs = document.getElementById('statSubscribers');
-                if (statSubs) statSubs.textContent = Number(data.subscriberCount || 0).toLocaleString();
-                const statViews = document.getElementById('statViews');
-                if (statViews) statViews.textContent = Number(data.viewCount || 0).toLocaleString();
-                const statVids = document.getElementById('statVideos');
-                if (statVids) statVids.textContent = Number(data.videoCount || 0).toLocaleString();
+                document.getElementById('statSubscribers').textContent = Number(data.subscriberCount).toLocaleString();
+                document.getElementById('statViews').textContent = Number(data.viewCount).toLocaleString();
+                document.getElementById('statVideos').textContent = Number(data.videoCount).toLocaleString();
 
-                // Save to localStorage for instant 0ms restoration next time
-                try {
-                    localStorage.setItem('cached_yt_channel_profile', JSON.stringify({
-                        title: data.title,
-                        customUrl: data.customUrl,
-                        avatar: avatarUrl,
-                        thumbnail_url: avatarUrl,
-                        userEmail: data.userEmail,
-                        subscriberCount: data.subscriberCount,
-                        viewCount: data.viewCount,
-                        videoCount: data.videoCount,
-                        id: data.id,
-                        allAccounts: data.allAccounts,
-                        allChannels: data.allChannels
-                    }));
-                } catch(e) {}
-
-                // Render channels & accounts in dropdown
+                // Render channels in dropdown
                 const listEl = document.getElementById('dropdownChannelsList');
-                if (listEl) {
-                    let html = '';
-                    if (data.allAccounts && data.allAccounts.length > 1) {
-                        html += '<div style="font-size: 11px; text-transform: uppercase; color: var(--accent-blue); padding: 6px 12px; font-weight: 500;">Google Accounts</div>';
-                        data.allAccounts.forEach(acc => {
-                            const isCurAcc = acc.is_active;
-                            html += `
-                                <div class="dropdown-channel-item ${isCurAcc ? 'active-channel' : ''}" style="margin-bottom: 4px;" onclick="onSwitchAccountClick('${acc.key}')">
-                                    <div style="width: 28px; height: 28px; border-radius: 50%; background: #3ea6ff; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; color: #fff;">
-                                        ${acc.email ? acc.email[0].toUpperCase() : 'G'}
-                                    </div>
-                                    <div class="channel-item-details">
-                                        <div class="channel-item-title">${acc.email}</div>
-                                        <div class="channel-item-subs">${(acc.channels && acc.channels.length) ? acc.channels.length + ' Channel(s)' : 'Connected'}</div>
-                                    </div>
-                                    ${isCurAcc ? '<span class="active-check-badge">Active</span>' : ''}
+                if (listEl && data.allChannels && data.allChannels.length > 0) {
+                    listEl.innerHTML = data.allChannels.map(ch => {
+                        const isActive = ch.id === data.id;
+                        return `
+                            <div class="dropdown-channel-item ${isActive ? 'active-channel' : ''}" onclick="onSwitchChannelClick('${ch.id}', ${isActive})">
+                                <img src="${ch.avatar || 'https://via.placeholder.com/32/333333/ffffff?text=YT'}" alt="ch">
+                                <div class="channel-item-details">
+                                    <div class="channel-item-title">${ch.title}</div>
+                                    <div class="channel-item-subs">${Number(ch.subscriberCount || 0).toLocaleString()} subs</div>
                                 </div>
-                            `;
-                        });
-                        html += '<div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); padding: 8px 12px 4px 12px; font-weight: 500;">Channels</div>';
-                    }
-
-                    if (data.allChannels && data.allChannels.length > 0) {
-                        const fallbackSvg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><circle cx='16' cy='16' r='16' fill='%23383838'/><circle cx='16' cy='12' r='6' fill='%23aaaaaa'/><path d='M6 28 C 6 20, 26 20, 26 28' fill='%23aaaaaa'/></svg>";
-                        html += data.allChannels.map(ch => {
-                            const isActive = ch.id === data.id;
-                            const chImg = ch.thumbnail_url || ch.avatar || fallbackSvg;
-                            return `
-                                <div class="dropdown-channel-item ${isActive ? 'active-channel' : ''}" onclick="onSwitchChannelClick('${ch.id}', ${isActive})">
-                                    <img src="${chImg}" alt="${ch.title || 'Channel'}" onerror="this.src='${fallbackSvg}'">
-                                    <div class="channel-item-details">
-                                        <div class="channel-item-title">${ch.title}</div>
-                                        <div class="channel-item-subs">${Number(ch.subscriberCount || 0).toLocaleString()} subs</div>
-                                    </div>
-                                    ${isActive ? '<span class="active-check-badge">✓</span>' : ''}
-                                </div>
-                            `;
-                        }).join('');
-                    }
-                    listEl.innerHTML = html;
+                                ${isActive ? '<span class="active-check-badge">✓</span>' : ''}
+                            </div>
+                        `;
+                    }).join('');
                 }
             } catch (err) {
-                console.error("renderChannelProfileData error:", err);
-            }
-        }
-
-        async function loadChannelInfo() {
-            try {
-                // Try instant 0ms render from localStorage first
-                try {
-                    const cached = localStorage.getItem('cached_yt_channel_profile');
-                    if (cached) {
-                        renderChannelProfileData(JSON.parse(cached));
-                    }
-                } catch(e) {}
-
-                const res = await fetch('/api/channel');
-                const data = await safeParseJson(res);
-                if (data && data.id && data.id !== 'no_channel') {
-                    window.currentActiveChannelId = data.id;
-                    window.currentActiveChannelTitle = data.title || 'YouTube Creator';
-                    checkGeminiStatus();
-                }
-                renderChannelProfileData(data);
-            } catch (err) {
-                console.error("loadChannelInfo error:", err);
-            }
-        }
-
-        async function onSwitchAccountClick(accountKey) {
-            try {
-                const drop = document.getElementById('accountDropdown');
-                if (drop) drop.classList.remove('show');
-                const res = await fetch(`/api/switch_account/${encodeURIComponent(accountKey)}`, { method: 'POST' });
-                if (res.ok) {
-                    await loadChannelInfo();
-                    await loadRecentVideos();
-                }
-            } catch (e) {
-                console.error("Switch account error:", e);
+                console.error(err);
             }
         }
 
@@ -4741,7 +2841,7 @@ HTML_MAIN = """
             });
         }
         document.addEventListener('click', (e) => {
-            if (accountDropdown && !accountDropdown.contains(e.target) && (!userPill || !userPill.contains(e.target))) {
+            if (accountDropdown && !accountDropdown.contains(e.target) && !userPill.contains(e.target)) {
                 accountDropdown.classList.remove('show');
             }
         });
@@ -4751,8 +2851,8 @@ HTML_MAIN = """
             const grid = document.getElementById('recentVideosGrid');
             try {
                 const res = await fetch('/api/recent_videos');
-                const videos = await safeParseJson(res);
-                if (!videos || !Array.isArray(videos) || videos.length === 0) {
+                const videos = await res.json();
+                if (!videos || videos.length === 0) {
                     grid.innerHTML = '<div style="color: var(--text-muted); font-size: 13px;">No recent videos found.</div>';
                     return;
                 }
@@ -4776,10 +2876,7 @@ HTML_MAIN = """
             }
         }
 
-        const refreshVideosBtn = document.getElementById('refreshVideosBtn');
-        if (refreshVideosBtn) {
-            refreshVideosBtn.addEventListener('click', loadRecentVideos);
-        }
+        document.getElementById('refreshVideosBtn').addEventListener('click', loadRecentVideos);
 
         // Upload Form with Resumable Tracking
         const uploadForm = document.getElementById('uploadForm');
@@ -4791,69 +2888,66 @@ HTML_MAIN = """
         const progressStatusText = document.getElementById('progressStatusText');
         const successCard = document.getElementById('successCard');
 
-        if (uploadForm) {
-            uploadForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                const hasFile = videoInput && videoInput.files && videoInput.files[0];
-                const existingInput = document.getElementById('existingVideoFilename');
-                const hasExisting = existingInput ? existingInput.value : '';
+        uploadForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const hasFile = videoInput.files && videoInput.files[0];
+            const hasExisting = document.getElementById('existingVideoFilename').value;
 
-                if (!hasFile && !hasExisting) {
-                    alert("Please select a video file to upload!");
-                    return;
+            if (!hasFile && !hasExisting) {
+                alert("Please select a video file to upload!");
+                return;
+            }
+
+            const formData = new FormData(uploadForm);
+            submitBtn.disabled = true;
+            progressCard.style.display = 'block';
+            successCard.style.display = 'none';
+            progressBarFill.style.width = '0%';
+            progressPercent.textContent = '0%';
+            progressTitle.textContent = 'Uploading to Server...';
+            progressStatusText.textContent = 'Streaming media payload to local buffer...';
+
+            progressCard.scrollIntoView({ behavior: 'smooth' });
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload_start', true);
+
+            xhr.upload.onprogress = (evt) => {
+                if (evt.lengthComputable) {
+                    const percentComplete = Math.round((evt.loaded / evt.total) * 45);
+                    progressBarFill.style.width = percentComplete + '%';
+                    progressPercent.textContent = percentComplete + '%';
                 }
+            };
 
-                const formData = new FormData(uploadForm);
-                if (submitBtn) submitBtn.disabled = true;
-                if (progressCard) progressCard.style.display = 'block';
-                if (successCard) successCard.style.display = 'none';
-                if (progressBarFill) progressBarFill.style.width = '0%';
-                if (progressPercent) progressPercent.textContent = '0%';
-                if (progressTitle) progressTitle.textContent = 'Uploading to Server...';
-                if (progressStatusText) progressStatusText.textContent = 'Streaming media payload to local buffer...';
+            xhr.onload = () => {
+                if (xhr.status === 200) {
+                    const res = JSON.parse(xhr.responseText);
+                    const taskId = res.task_id;
+                    progressTitle.textContent = 'YouTube Cloud Ingestion...';
+                    progressStatusText.textContent = 'Connecting to Google Video Resumable Upload Engine...';
+                    pollUploadProgress(taskId);
+                } else {
+                    submitBtn.disabled = false;
+                    progressTitle.textContent = 'Upload Failed';
+                    progressStatusText.textContent = 'Error: ' + xhr.responseText;
+                }
+            };
 
-                if (progressCard) progressCard.scrollIntoView({ behavior: 'smooth' });
+            xhr.onerror = () => {
+                submitBtn.disabled = false;
+                progressTitle.textContent = 'Network Error';
+                progressStatusText.textContent = 'Failed to reach local server.';
+            };
 
-                const xhr = new XMLHttpRequest();
-                xhr.open('POST', '/api/upload_start', true);
-
-                xhr.upload.onprogress = (evt) => {
-                    if (evt.lengthComputable) {
-                        const percentComplete = Math.round((evt.loaded / evt.total) * 45);
-                        if (progressBarFill) progressBarFill.style.width = percentComplete + '%';
-                        if (progressPercent) progressPercent.textContent = percentComplete + '%';
-                    }
-                };
-
-                xhr.onload = () => {
-                    if (xhr.status === 200) {
-                        const res = JSON.parse(xhr.responseText);
-                        const taskId = res.task_id;
-                        if (progressTitle) progressTitle.textContent = 'YouTube Cloud Ingestion...';
-                        if (progressStatusText) progressStatusText.textContent = 'Connecting to Google Video Resumable Upload Engine...';
-                        pollUploadProgress(taskId);
-                    } else {
-                        if (submitBtn) submitBtn.disabled = false;
-                        if (progressTitle) progressTitle.textContent = 'Upload Failed';
-                        if (progressStatusText) progressStatusText.textContent = 'Error: ' + xhr.responseText;
-                    }
-                };
-
-                xhr.onerror = () => {
-                    if (submitBtn) submitBtn.disabled = false;
-                    if (progressTitle) progressTitle.textContent = 'Network Error';
-                    if (progressStatusText) progressStatusText.textContent = 'Failed to reach local server.';
-                };
-
-                xhr.send(formData);
-            });
-        }
+            xhr.send(formData);
+        });
 
         function pollUploadProgress(taskId) {
             const interval = setInterval(async () => {
                 try {
                     const res = await fetch(`/api/upload_status/${taskId}`);
-                    const data = await safeParseJson(res);
+                    const data = await res.json();
                     
                     if (data.status === 'uploading') {
                         const ytPercent = Math.round(45 + (data.progress * 50));
@@ -4891,48 +2985,10 @@ HTML_MAIN = """
             }, 1000);
         }
 
-        // ==============================================
-        // INITIALIZATION & TAB BINDING (WITH TRY-CATCH)
-        // ==============================================
-        function initializeApp() {
-            try {
-                window.forceClearBlockingOverlays();
-
-                // Bind the two core pillar tabs with mobile touch and desktop click listeners
-                bindTabButton('tabGeminiMode', 'gemini');
-                bindTabButton('tabManualMode', 'manual');
-
-                // Default active tab to Gemini AI Studio Copilot (#geminiStudioSection) on initial page load
-                window.switchWorkspaceTab('gemini');
-            } catch (e) {
-                console.warn("Tab binding warning:", e);
-            }
-
-            try {
-                loadChannelInfo();
-            } catch (e) {
-                console.warn("loadChannelInfo warning:", e);
-            }
-
-            try {
-                loadRecentVideos();
-                loadChannelVideosForPicker();
-            } catch (e) {
-                console.warn("loadRecentVideos warning:", e);
-            }
-
-            try {
-                checkGeminiStatus();
-            } catch (e) {
-                console.warn("checkGeminiStatus warning:", e);
-            }
-        }
-
-        if (document.readyState === 'loading') {
-            window.addEventListener('DOMContentLoaded', initializeApp);
-        } else {
-            initializeApp();
-        }
+        // Initialize on page load
+        loadChannelInfo();
+        loadRecentVideos();
+        checkGeminiStatus();
     </script>
 </body>
 </html>
@@ -4943,7 +2999,7 @@ HTML_SETUP = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <meta name="viewport" content="width=1280, initial-scale=0.8">
     <title>Setup - YouTube Studio Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
@@ -5046,6 +3102,10 @@ HTML_SETUP = """
 
 @app.route('/')
 def index():
+    template_file = os.path.join(BASE_DIR, 'templates', 'index.html')
+    if os.path.exists(template_file):
+        from flask import render_template
+        return render_template('index.html')
     return render_template_string(HTML_MAIN)
 
 @app.route('/setup')
@@ -5072,11 +3132,10 @@ def authorize():
     if not os.path.exists(CLIENT_SECRETS_FILE):
         return redirect('/setup')
 
-    redirect_uri = get_oauth_redirect_uri()
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE,
         scopes=SCOPES,
-        redirect_uri=redirect_uri
+        redirect_uri=url_for('oauth2callback', _external=True)
     )
 
     # Prompt select_account so the user can choose ANY email or add a new account freely
@@ -5098,36 +3157,28 @@ def authorize():
 @app.route('/switch_account')
 def switch_account():
     # Clear session credentials so user can pick any new or existing Google account
-    session.pop('credentials', None)
-    session.pop('state', None)
-    session.pop('code_verifier', None)
+    session.clear()
     return redirect('/authorize?prompt=select_account')
 
 @app.route('/oauth2callback')
 def oauth2callback():
     state = session.get('state')
-    redirect_uri = get_oauth_redirect_uri()
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE,
         scopes=SCOPES,
         state=state,
-        redirect_uri=redirect_uri
+        redirect_uri=url_for('oauth2callback', _external=True)
     )
     if 'code_verifier' in session and session['code_verifier']:
         flow.code_verifier = session['code_verifier']
-
-    auth_response = request.url
-    if (request.headers.get('X-Forwarded-Proto') == 'https' or request.is_secure) and auth_response.startswith('http://'):
-        auth_response = 'https://' + auth_response[7:]
-
-    flow.fetch_token(authorization_response=auth_response)
+    flow.fetch_token(authorization_response=request.url)
     credentials = flow.credentials
 
     # Fetch user email
     user_email = ""
     try:
         import requests
-        u_res = requests.get('https://www.googleapis.com/oauth2/v2/userinfo', headers={'Authorization': f'Bearer {credentials.token}'}, timeout=5)
+        u_res = requests.get('https://www.googleapis.com/oauth2/v2/userinfo', headers={'Authorization': f'Bearer {credentials.token}'}, timeout=4)
         if u_res.ok:
             user_email = u_res.json().get('email', '')
     except Exception as e:
@@ -5141,81 +3192,23 @@ def oauth2callback():
         'client_secret': credentials.client_secret,
         'scopes': credentials.scopes
     }
-
-    # Fetch YouTube channels for this newly signed-in account
-    channels_list = []
-    try:
-        yt = build('youtube', 'v3', credentials=credentials)
-        res = yt.channels().list(mine=True, part='snippet,statistics').execute()
-        for ch in res.get('items', []):
-            snip = ch.get('snippet', {})
-            st = ch.get('statistics', {})
-            thumbs = snip.get('thumbnails', {})
-            avatar_url = thumbs.get('default', {}).get('url') or thumbs.get('medium', {}).get('url') or thumbs.get('high', {}).get('url') or ''
-            channels_list.append({
-                'id': ch.get('id'),
-                'title': snip.get('title', 'YouTube Creator'),
-                'customUrl': snip.get('customUrl', ''),
-                'avatar': avatar_url,
-                'thumbnail_url': thumbs.get('default', {}).get('url', avatar_url),
-                'subscriberCount': st.get('subscriberCount', '0'),
-                'videoCount': st.get('videoCount', '0'),
-                'viewCount': st.get('viewCount', '0')
-            })
-    except Exception as ye:
-        print(f"Channels fetch during oauth notice: {ye}")
-
-    account_key = save_user_account(user_email, creds_dict, channels_list)
-    session.permanent = True
-    session['active_account_key'] = account_key
     session['credentials'] = creds_dict
     session['user_email'] = user_email
-    if channels_list:
-        session['active_channel_id'] = channels_list[0]['id']
-    else:
-        session.pop('active_channel_id', None)
+    session.pop('active_channel_id', None)
 
-    try:
-        with open(TOKEN_FILE, 'w') as f:
-            json.dump(creds_dict, f)
-    except Exception:
-        pass
-
+    with open(TOKEN_FILE, 'w') as f:
+        json.dump(creds_dict, f)
     return redirect('/')
 
 @app.route('/logout')
 def logout():
     session.clear()
+    if os.path.exists(TOKEN_FILE):
+        try:
+            os.remove(TOKEN_FILE)
+        except Exception:
+            pass
     return redirect('/authorize')
-
-@app.route('/api/accounts')
-def list_accounts():
-    accounts = load_accounts_store()
-    current_key = session.get('active_account_key', '')
-    acc_list = []
-    for k, v in accounts.items():
-        acc_list.append({
-            'key': k,
-            'email': v.get('email', k),
-            'channels': v.get('channels', []),
-            'active_channel_id': v.get('active_channel_id', ''),
-            'is_active': (k == current_key)
-        })
-    return jsonify({'accounts': acc_list, 'active_account_key': current_key})
-
-@app.route('/api/switch_account/<path:account_key>', methods=['POST'])
-def switch_active_account(account_key):
-    accounts = load_accounts_store()
-    account_key = account_key.lower().strip()
-    if account_key not in accounts:
-        return jsonify({'error': 'Account not found'}), 404
-
-    acc = accounts[account_key]
-    session['active_account_key'] = account_key
-    session['credentials'] = acc['credentials']
-    session['user_email'] = acc.get('email', '')
-    session['active_channel_id'] = acc.get('active_channel_id')
-    return jsonify({'success': True, 'account': account_key})
 
 @app.route('/api/switch_channel/<channel_id>', methods=['POST'])
 def switch_channel(channel_id):
@@ -5225,114 +3218,46 @@ def switch_channel(channel_id):
 @app.route('/api/channel')
 def channel_info():
     creds = get_stored_credentials()
-    default_avatar = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="90" height="90" viewBox="0 0 90 90"><circle cx="45" cy="45" r="45" fill="%23282828"/><circle cx="45" cy="34" r="18" fill="%23aaaaaa"/><path d="M15 76 C 15 54, 75 54, 75 76" fill="%23aaaaaa"/></svg>'
-
     if not creds:
         return jsonify({
-            'id': 'disconnected',
-            'title': 'Connect Channel',
-            'customUrl': '@connect',
-            'avatar': default_avatar,
-            'thumbnail_url': default_avatar,
-            'subscriberCount': 0,
-            'videoCount': 0,
-            'viewCount': 0,
-            'allChannels': [],
-            'allAccounts': [],
-            'userEmail': '',
-            'is_authenticated': False
+            'id': 'demo_channel',
+            'title': 'Shoaib Gh (Studio)',
+            'customUrl': '@shoaibgh-studio',
+            'avatar': 'https://via.placeholder.com/128/ff0000/ffffff?text=SG',
+            'subscriberCount': 226,
+            'videoCount': 4,
+            'viewCount': 203,
+            'allChannels': [{
+                'id': 'demo_channel',
+                'title': 'Shoaib Gh (Studio)',
+                'avatar': 'https://via.placeholder.com/64/ff0000/ffffff?text=SG',
+                'subscriberCount': 226
+            }],
+            'userEmail': 'shoaibgh473@gmail.com',
+            'is_demo': True
         })
-
     try:
         youtube = build('youtube', 'v3', credentials=creds)
-        active_id = session.get('active_channel_id')
-        items = []
-
-        # 1. Fetch channel details using youtube.channels().list(mine=True, part='snippet,statistics')
-        try:
-            res = youtube.channels().list(mine=True, part='snippet,statistics').execute()
-            items = res.get('items', [])
-        except Exception as e:
-            print(f"Error calling channels().list(mine=True): {e}")
-
-        # 2. If active_id specified and not found in mine, try id query
-        if active_id and not any(ch.get('id') == active_id for ch in items):
-            try:
-                id_res = youtube.channels().list(id=active_id, part='snippet,statistics').execute()
-                if id_res.get('items'):
-                    items = id_res.get('items') + items
-            except Exception as e:
-                print(f"Error querying channel by id {active_id}: {e}")
-
-        user_email = session.get('user_email', '')
-        if not user_email:
-            try:
-                import requests
-                u_res = requests.get('https://www.googleapis.com/oauth2/v2/userinfo', headers={'Authorization': f'Bearer {creds.token}'}, timeout=3)
-                if u_res.ok:
-                    user_email = u_res.json().get('email', '')
-                    session['user_email'] = user_email
-            except Exception:
-                pass
-
-        accounts = load_accounts_store()
-        current_key = session.get('active_account_key', '')
-        connected_accounts = []
-        for k, acc in accounts.items():
-            connected_accounts.append({
-                'key': k,
-                'email': acc.get('email', k),
-                'channels': acc.get('channels', []),
-                'active_channel_id': acc.get('active_channel_id', ''),
-                'is_active': (k == current_key)
-            })
-
+        res = youtube.channels().list(mine=True, part='snippet,statistics,contentDetails').execute()
+        items = res.get('items', [])
         if not items:
-            # Check cached channels from user_accounts.json
-            cached_channels = []
-            account_key = session.get('active_account_key') or (user_email.lower().strip() if user_email else '')
-            if account_key and account_key in accounts:
-                cached_channels = accounts[account_key].get('channels', [])
-            elif accounts:
-                first_acc = next(iter(accounts.values()))
-                cached_channels = first_acc.get('channels', [])
+            return jsonify({'error': 'No YouTube channel found for this Google account'}), 404
 
-            if cached_channels:
-                c_ch = cached_channels[0]
-                return jsonify({
-                    'id': c_ch.get('id', 'cached_channel'),
-                    'title': c_ch.get('title', 'YouTube Creator'),
-                    'customUrl': c_ch.get('customUrl', ''),
-                    'avatar': c_ch.get('avatar', default_avatar),
-                    'thumbnail_url': c_ch.get('thumbnail_url', c_ch.get('avatar', default_avatar)),
-                    'subscriberCount': c_ch.get('subscriberCount', '0'),
-                    'videoCount': c_ch.get('videoCount', '0'),
-                    'viewCount': c_ch.get('viewCount', '0'),
-                    'uploadsPlaylist': '',
-                    'userEmail': user_email,
-                    'has_channel': True,
-                    'allChannels': cached_channels,
-                    'allAccounts': connected_accounts
-                })
-
-            user_name = user_email.split('@')[0] if user_email else "YouTube User"
-            user_avatar = f"https://ui-avatars.com/api/?name={user_name}&background=ff0000&color=ffffff&size=128"
-            return jsonify({
-                'id': 'no_channel',
-                'title': user_name,
-                'customUrl': f"@{user_name.lower().replace(' ', '')}",
-                'avatar': user_avatar,
-                'thumbnail_url': user_avatar,
-                'subscriberCount': 0,
-                'videoCount': 0,
-                'viewCount': 0,
-                'userEmail': user_email,
-                'has_channel': False,
-                'allChannels': [],
-                'allAccounts': connected_accounts
+        all_channels = []
+        for ch in items:
+            snip = ch.get('snippet', {})
+            st = ch.get('statistics', {})
+            all_channels.append({
+                'id': ch.get('id'),
+                'title': snip.get('title', 'YouTube Creator'),
+                'customUrl': snip.get('customUrl', ''),
+                'avatar': snip.get('thumbnails', {}).get('medium', {}).get('url', ''),
+                'subscriberCount': st.get('subscriberCount', '0'),
+                'videoCount': st.get('videoCount', '0'),
+                'viewCount': st.get('viewCount', '0')
             })
 
-        # Match active channel or default to primary
+        active_id = session.get('active_channel_id')
         active_ch = None
         if active_id:
             for ch in items:
@@ -5345,83 +3270,36 @@ def channel_info():
 
         snippet = active_ch.get('snippet', {})
         stats = active_ch.get('statistics', {})
-        thumbs = snippet.get('thumbnails', {})
+        content_details = active_ch.get('contentDetails', {})
+        uploads_playlist = content_details.get('relatedPlaylists', {}).get('uploads', '')
 
-        # Extract avatar URLs with priority: default -> medium -> high
-        default_thumb = thumbs.get('default', {}).get('url', '')
-        medium_thumb = thumbs.get('medium', {}).get('url', '')
-        high_thumb = thumbs.get('high', {}).get('url', '')
-        channel_avatar = default_thumb or medium_thumb or high_thumb or default_avatar
-
-        # Build list of all channels
-        all_channels = []
-        for ch in items:
-            snip = ch.get('snippet', {})
-            st = ch.get('statistics', {})
-            t = snip.get('thumbnails', {})
-            c_avatar = t.get('default', {}).get('url') or t.get('medium', {}).get('url') or t.get('high', {}).get('url') or default_avatar
-            all_channels.append({
-                'id': ch.get('id'),
-                'title': snip.get('title', 'YouTube Creator'),
-                'customUrl': snip.get('customUrl', ''),
-                'avatar': c_avatar,
-                'thumbnail_url': t.get('default', {}).get('url', c_avatar),
-                'subscriberCount': st.get('subscriberCount', '0'),
-                'videoCount': st.get('videoCount', '0'),
-                'viewCount': st.get('viewCount', '0')
-            })
-
-        # Persist fetched channel metrics to user_accounts.json for offline / quota exhaustion fallback
-        try:
-            acc_key = session.get('active_account_key') or (user_email.lower().strip() if user_email else '')
-            if acc_key:
-                acc_store = load_accounts_store()
-                if acc_key in acc_store:
-                    acc_store[acc_key]['channels'] = all_channels
-                    acc_store[acc_key]['active_channel_id'] = active_ch.get('id')
-                    save_accounts_store(acc_store)
-                elif user_email:
-                    acc_store[acc_key] = {
-                        "email": user_email,
-                        "credentials": session.get('credentials', {}),
-                        "channels": all_channels,
-                        "active_channel_id": active_ch.get('id'),
-                        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    save_accounts_store(acc_store)
-        except Exception as e:
-            print(f"Notice: Failed to update channel cache in user_accounts: {e}")
-
-        uploads_playlist = ''
-        try:
-            cd_res = youtube.channels().list(id=active_ch.get('id'), part='contentDetails').execute()
-            if cd_res.get('items'):
-                uploads_playlist = cd_res['items'][0].get('contentDetails', {}).get('relatedPlaylists', {}).get('uploads', '')
-        except Exception:
-            pass
+        user_email = session.get('user_email', '')
+        if not user_email:
+            try:
+                import requests
+                u_res = requests.get('https://www.googleapis.com/oauth2/v2/userinfo', headers={'Authorization': f'Bearer {creds.token}'}, timeout=3)
+                if u_res.ok:
+                    user_email = u_res.json().get('email', '')
+                    session['user_email'] = user_email
+            except Exception:
+                pass
 
         return jsonify({
             'id': active_ch.get('id'),
             'title': snippet.get('title', 'YouTube Creator'),
-            'customUrl': snippet.get('customUrl') or ('@' + snippet.get('title', 'creator').lower().replace(' ', '')),
-            'avatar': channel_avatar,
-            'thumbnail_url': default_thumb or channel_avatar,
+            'customUrl': snippet.get('customUrl', ''),
+            'avatar': snippet.get('thumbnails', {}).get('medium', {}).get('url', ''),
             'subscriberCount': stats.get('subscriberCount', '0'),
             'videoCount': stats.get('videoCount', '0'),
             'viewCount': stats.get('viewCount', '0'),
             'uploadsPlaylist': uploads_playlist,
             'userEmail': user_email,
-            'has_channel': True,
-            'allChannels': all_channels,
-            'allAccounts': connected_accounts
+            'allChannels': all_channels
         })
     except Exception as e:
-        print(f"Error in /api/channel: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/recent_videos')
-@app.route('/api/youtube/channel_videos')
-@app.route('/api/channel/videos')
 def recent_videos():
     creds = get_stored_credentials()
     if not creds:
@@ -5443,62 +3321,172 @@ def recent_videos():
         pl_res = youtube.playlistItems().list(
             playlistId=uploads_id,
             part='snippet,status',
-            maxResults=18
+            maxResults=8
         ).execute()
 
-        video_items = pl_res.get('items', [])
-        if not video_items:
-            return jsonify([])
-
-        # Batch fetch full video metadata (snippet, contentDetails, status)
-        v_ids = [item.get('snippet', {}).get('resourceId', {}).get('videoId') for item in video_items if item.get('snippet', {}).get('resourceId', {}).get('videoId')]
-        details_map = {}
-        if v_ids:
-            try:
-                v_res = youtube.videos().list(id=','.join(v_ids), part='snippet,contentDetails,status').execute()
-                for v in v_res.get('items', []):
-                    details_map[v['id']] = v
-            except Exception as de:
-                print(f"Notice fetching video details: {de}")
-
         video_list = []
-        for item in video_items:
+        for item in pl_res.get('items', []):
             snip = item.get('snippet', {})
             video_id = snip.get('resourceId', {}).get('videoId')
-            if not video_id:
-                continue
-
-            full_v = details_map.get(video_id, {})
-            v_snip = full_v.get('snippet', snip)
-            v_cd = full_v.get('contentDetails', {})
-            v_st = full_v.get('status', item.get('status', {}))
-
-            dur_iso = v_cd.get('duration', '')
-            dur_sec = gemini_engine.parse_iso8601_duration(dur_iso)
-            is_short = (dur_sec <= 60 and dur_sec > 0) or ('#shorts' in (v_snip.get('title') or '').lower())
-            privacy = v_st.get('privacyStatus', 'public').upper()
-            t_obj = v_snip.get('thumbnails', {})
-            t_url = t_obj.get('high', {}).get('url') or t_obj.get('medium', {}).get('url') or t_obj.get('default', {}).get('url') or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-
             video_list.append({
                 'id': video_id,
-                'title': v_snip.get('title', 'Untitled Video'),
-                'description': v_snip.get('description', ''),
-                'tags': v_snip.get('tags', []),
-                'category_id': v_snip.get('categoryId', '24'),
-                'default_language': v_snip.get('defaultLanguage') or v_snip.get('defaultAudioLanguage') or '',
-                'publishedAt': v_snip.get('publishedAt', ''),
-                'thumbnail': t_url,
-                'privacy': privacy,
-                'is_private_or_unlisted': privacy in ['PRIVATE', 'UNLISTED'],
-                'duration_seconds': dur_sec,
-                'duration_text': f"{dur_sec // 60}:{dur_sec % 60:02d}" if dur_sec > 0 else ("< 60s" if is_short else ""),
-                'is_short': is_short
+                'title': snip.get('title'),
+                'publishedAt': snip.get('publishedAt'),
+                'thumbnail': snip.get('thumbnails', {}).get('medium', {}).get('url', ''),
+                'privacy': item.get('status', {}).get('privacyStatus', 'public').upper()
             })
         return jsonify(video_list)
     except Exception as e:
-        print(f"Error fetching channel videos: {e}")
         return jsonify({'error': str(e)}), 500
+
+# ==============================================
+# VIDEO EDITING & THUMBNAIL ENDPOINTS
+# ==============================================
+
+@app.route('/api/video/<video_id>', methods=['GET'])
+def get_video_api(video_id):
+    """Fetches details for editing a specific video on YouTube."""
+    creds = get_stored_credentials()
+    if not creds:
+        return jsonify({'error': 'Unauthorized: Please log in'}), 401
+    try:
+        youtube = build('youtube', 'v3', credentials=creds)
+        res = youtube.videos().list(id=video_id, part='snippet,status,statistics').execute()
+        items = res.get('items', [])
+        if not items:
+            return jsonify({'error': f"Video '{video_id}' not found on YouTube"}), 404
+
+        v = items[0]
+        snip = v.get('snippet', {})
+        status = v.get('status', {})
+        stats = v.get('statistics', {})
+
+        return jsonify({
+            'id': video_id,
+            'title': snip.get('title', ''),
+            'description': snip.get('description', ''),
+            'tags': snip.get('tags', []),
+            'categoryId': snip.get('categoryId', '22'),
+            'privacy': status.get('privacyStatus', 'public').lower(),
+            'thumbnail': (
+                snip.get('thumbnails', {}).get('maxres', {}).get('url') or
+                snip.get('thumbnails', {}).get('high', {}).get('url') or
+                snip.get('thumbnails', {}).get('medium', {}).get('url', '')
+            ),
+            'viewCount': stats.get('viewCount', '0'),
+            'likeCount': stats.get('likeCount', '0'),
+            'publishedAt': snip.get('publishedAt', '')
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/video/update', methods=['POST'])
+def update_video_api():
+    """Updates video metadata (title, description, tags, category, privacy) directly on YouTube."""
+    creds = get_stored_credentials()
+    if not creds:
+        return jsonify({'error': 'Unauthorized: Please log in'}), 401
+
+    data = request.get_json(silent=True) or request.form.to_dict()
+    video_id = data.get('video_id', '').strip()
+    if not video_id:
+        return jsonify({'error': 'Video ID is required'}), 400
+
+    title = data.get('title', '').strip()
+    description = data.get('description', '').strip()
+    raw_tags = data.get('tags', [])
+    if isinstance(raw_tags, str):
+        tags = [t.strip() for t in raw_tags.split(',') if t.strip()]
+    else:
+        tags = [t.strip() for t in raw_tags if isinstance(t, str) and t.strip()]
+
+    category_id = str(data.get('category_id', '22')).strip()
+    privacy_status = data.get('privacy_status', '').strip().lower()
+
+    try:
+        youtube = build('youtube', 'v3', credentials=creds)
+        current = youtube.videos().list(id=video_id, part='snippet,status').execute()
+        items = current.get('items', [])
+        if not items:
+            return jsonify({'error': 'Video not found on YouTube'}), 404
+
+        cur_snip = items[0].get('snippet', {})
+        cur_status = items[0].get('status', {})
+
+        new_title = title if title else cur_snip.get('title', 'Untitled Video')
+        new_desc = description if description != '' else cur_snip.get('description', '')
+        new_cat = category_id if category_id else cur_snip.get('categoryId', '22')
+        new_privacy = privacy_status if privacy_status in ['public', 'private', 'unlisted'] else cur_status.get('privacyStatus', 'public')
+
+        body = {
+            'id': video_id,
+            'snippet': {
+                'title': new_title[:100],
+                'description': new_desc[:5000],
+                'tags': tags if tags else cur_snip.get('tags', []),
+                'categoryId': str(new_cat)
+            },
+            'status': {
+                'privacyStatus': new_privacy
+            }
+        }
+
+        up_res = youtube.videos().update(part='snippet,status', body=body).execute()
+        return jsonify({
+            'status': 'success',
+            'message': f"Video '{video_id}' updated successfully.",
+            'video': {
+                'id': video_id,
+                'title': up_res.get('snippet', {}).get('title'),
+                'tags': up_res.get('snippet', {}).get('tags', []),
+                'privacy': up_res.get('status', {}).get('privacyStatus')
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/video/thumbnail', methods=['POST'])
+def update_thumbnail_api():
+    """Uploads a new custom thumbnail directly to a YouTube video."""
+    creds = get_stored_credentials()
+    if not creds:
+        return jsonify({'error': 'Unauthorized: Please log in'}), 401
+
+    video_id = request.form.get('video_id', '').strip()
+    thumb_file = request.files.get('thumbnail_file')
+    if not video_id or not thumb_file or thumb_file.filename == '':
+        return jsonify({'error': 'Video ID and thumbnail file are required'}), 400
+
+    thumb_name = secure_filename(f"thumb_edit_{video_id}_{thumb_file.filename}")
+    thumb_path = os.path.join(UPLOAD_FOLDER, thumb_name)
+    thumb_file.save(thumb_path)
+
+    try:
+        youtube = build('youtube', 'v3', credentials=creds)
+        media = MediaFileUpload(thumb_path, mimetype='image/jpeg', resumable=True)
+        t_res = youtube.thumbnails().set(
+            videoId=video_id,
+            media_body=media
+        ).execute()
+        new_thumb_url = t_res.get('items', [{}])[0].get('default', {}).get('url', '')
+        return jsonify({
+            'status': 'success',
+            'message': 'Thumbnail updated successfully.',
+            'thumbnail_url': new_thumb_url
+        })
+    except Exception as e:
+        err_msg = str(e)
+        if 'verified' in err_msg.lower() or 'forbidden' in err_msg.lower():
+            return jsonify({'error': 'Custom thumbnail upload requires a phone-verified YouTube channel.'}), 403
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if os.path.exists(thumb_path):
+            try:
+                os.remove(thumb_path)
+            except Exception:
+                pass
 
 # ==============================================
 # GEMINI AI COPILOT & MULTIMODAL ENDPOINTS
@@ -5506,17 +3494,16 @@ def recent_videos():
 
 @app.route('/api/gemini/status')
 def gemini_status():
-    ch_id = get_active_channel_id_or_default()
-    st = gemini_engine.get_gemini_status(ch_id)
-    return jsonify(st)
+    return jsonify(gemini_engine.get_gemini_status())
 
 @app.route('/api/gemini/config', methods=['POST'])
 def gemini_save_config():
     data = request.get_json(force=True, silent=True) or {}
-    api_key = (data.get('api_key') or '').strip()
-    model = (data.get('model') or gemini_engine.DEFAULT_MODEL).strip()
-    ch_id = (data.get('channel_id') or '').strip() or get_active_channel_id_or_default()
-    res = gemini_engine.save_gemini_config(api_key, model, channel_id=ch_id)
+    api_key = data.get('api_key', '').strip()
+    model = data.get('model', 'gemini-3.8-flash').strip()
+    if not api_key:
+        return jsonify({'error': 'API key is required'}), 400
+    res = gemini_engine.save_gemini_config(api_key, model)
     return jsonify(res)
 
 @app.route('/api/gemini/analyze', methods=['POST'])
@@ -5534,13 +3521,7 @@ def gemini_analyze():
     video_file.save(video_path)
 
     try:
-        ch_id = get_active_channel_id_or_default(request.form.get('channel_id'))
-        metadata = gemini_engine.analyze_video_with_gemini(
-            video_path,
-            format_type=format_type,
-            custom_instructions=instructions,
-            channel_id=ch_id
-        )
+        metadata = gemini_engine.analyze_video_with_gemini(video_path, format_type=format_type, custom_instructions=instructions)
         metadata['video_filename'] = safe_name
         return jsonify(metadata)
     except Exception as e:
@@ -5553,19 +3534,12 @@ def save_thumbnail_frame():
     label = request.form.get('label', 'Authentic Video Frame')
     timestamp = request.form.get('timestamp', '00:00')
     seconds = float(request.form.get('seconds', 0.0))
-    aspect_ratio = request.form.get('aspect_ratio', '').strip() or None
 
     if not image_file or image_file.filename == '':
         return jsonify({'error': 'No frame image provided'}), 400
 
     filename = secure_filename(f"extracted_{uuid.uuid4().hex[:8]}_{image_file.filename}")
-    res = gemini_engine.save_client_frame(
-        image_file.read(),
-        filename=filename,
-        timestamp=timestamp,
-        label=label,
-        aspect_ratio=aspect_ratio
-    )
+    res = gemini_engine.save_client_frame(image_file.read(), filename=filename, timestamp=timestamp, label=label)
     res['seconds'] = seconds
     return jsonify(res)
 
@@ -5580,344 +3554,8 @@ def gemini_chat():
     context = data.get('context', {})
     if not message:
         return jsonify({'error': 'Message is required'}), 400
-    ch_id = get_active_channel_id_or_default(data.get('channel_id'))
-    res = gemini_engine.chat_with_gemini(message, studio_context=context, channel_id=ch_id)
+    res = gemini_engine.chat_with_gemini(message, studio_context=context)
     return jsonify(res)
-
-@app.route('/api/pipeline/record', methods=['GET'])
-def api_get_pipeline_record():
-    video_id = (request.args.get('video_id') or '').strip()
-    if not video_id:
-        return jsonify({'error': 'Missing video_id parameter'}), 400
-    vid = gemini_engine.extract_youtube_video_id(video_id)
-    if not vid:
-        return jsonify({'error': f"Invalid video ID: '{video_id}'"}), 400
-    record = get_pipeline_record(vid)
-    return jsonify({'success': True, 'video_id': vid, 'record': record if record else None}), 200
-
-@app.route('/api/pipeline/generate_thumbnail', methods=['POST'])
-def api_generate_thumbnail():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        video_id = (data.get('video_id') or '').strip()
-        if not video_id:
-            return jsonify({'error': 'Missing video_id parameter'}), 400
-        vid = gemini_engine.extract_youtube_video_id(video_id)
-        if not vid:
-            return jsonify({'error': f"Invalid video ID: '{video_id}'"}), 400
-
-        ch_id = get_active_channel_id_or_default(data.get('channel_id'))
-        aspect_ratio = data.get('aspect_ratio') or '16:9'
-        format_type = data.get('format_type') or ('Short' if aspect_ratio == '9:16' else 'Long')
-
-        record = get_pipeline_record(vid)
-        metadata = record.get('analysis_result') or {}
-        if not metadata:
-            metadata = {
-                "title": record.get("generated_title", f"Video {vid}"),
-                "primary_context": record.get("generated_title", f"Video {vid}"),
-                "detected_genre": "High-Suspense Cinematic"
-            }
-
-        custom_prompt = (data.get('prompt') or '').strip()
-        if custom_prompt:
-            metadata["thumbnail_prompt"] = custom_prompt
-            if "thumbnail_directive" not in metadata:
-                metadata["thumbnail_directive"] = {}
-            metadata["thumbnail_directive"]["visual_scene_direction"] = custom_prompt
-
-        save_pipeline_record(vid, {"thumbnail_status": "generating"})
-
-        raw_frame_bgr, local_thumb_path = gemini_engine.download_youtube_thumbnail_frame(vid)
-        face_crop_bgr = None
-        if raw_frame_bgr is not None and raw_frame_bgr.size > 0:
-            face_crop_bgr = gemini_engine.extract_character_face_reference_crop(raw_frame_bgr, None)
-
-        try:
-            thumb_res = gemini_engine.generate_dynamic_ai_thumbnail(
-                video_path=local_thumb_path,
-                format_type=format_type,
-                aspect_ratio=aspect_ratio,
-                metadata=metadata,
-                reference_frame_bgr=raw_frame_bgr,
-                reference_face_crop_bgr=face_crop_bgr,
-                channel_id=ch_id
-            )
-            save_pipeline_record(vid, {
-                "thumbnail_status": "completed",
-                "thumbnail_filename": thumb_res["filename"],
-                "thumbnail_url": thumb_res["url"],
-                "thumbnail_error": None,
-                "last_successful_stage": "thumbnail" if record.get("youtube_update_status") == "completed" else record.get("last_successful_stage", "analysis")
-            })
-            return jsonify({
-                "success": True,
-                "thumbnail": thumb_res,
-                "message": "4K Movie Poster Thumbnail generated successfully!"
-            }), 200
-        except Exception as te:
-            err_msg = str(te)
-            is_quota = ("quota" in err_msg.lower() or "429" in err_msg or "resourceexhausted" in err_msg.lower())
-            save_pipeline_record(vid, {
-                "thumbnail_status": "failed",
-                "thumbnail_error": err_msg
-            })
-            return jsonify({
-                "success": False,
-                "error": err_msg,
-                "quota_exceeded": is_quota,
-                "message": f"Thumbnail generation failed: {err_msg}. You can manually upload a thumbnail or skip this stage."
-            }), 200
-    except Exception as e:
-        return jsonify({'error': str(e) or 'Thumbnail generation endpoint error'}), 500
-
-@app.route('/api/pipeline/upload_thumbnail', methods=['POST'])
-def api_upload_manual_thumbnail():
-    try:
-        video_id = (request.form.get('video_id') or '').strip()
-        if not video_id:
-            return jsonify({'error': 'Missing video_id parameter'}), 400
-        vid = gemini_engine.extract_youtube_video_id(video_id)
-        if not vid:
-            return jsonify({'error': f"Invalid video ID: '{video_id}'"}), 400
-
-        file = request.files.get('thumbnail_file')
-        if not file or not file.filename:
-            return jsonify({'error': 'No thumbnail file uploaded'}), 400
-
-        ext = os.path.splitext(file.filename)[1].lower()
-        if ext not in ['.jpg', '.jpeg', '.png', '.webp']:
-            return jsonify({'error': 'Invalid image format. Supported: JPG, PNG, WebP'}), 400
-
-        fname = f"manual_thumb_{vid}_{uuid.uuid4().hex[:8]}.jpg"
-        save_path = os.path.join(gemini_engine.THUMBNAILS_DIR, fname)
-        file.save(save_path)
-
-        url = f"/api/thumbnail_file/{fname}"
-        save_pipeline_record(vid, {
-            "thumbnail_status": "manual",
-            "thumbnail_filename": fname,
-            "thumbnail_url": url,
-            "thumbnail_error": None
-        })
-        return jsonify({
-            'success': True,
-            'thumbnail': {
-                'id': 'manual_thumb',
-                'filename': fname,
-                'url': url,
-                'label': 'Custom Uploaded Thumbnail'
-            },
-            'message': 'Manual thumbnail uploaded successfully!'
-        }), 200
-    except Exception as e:
-        return jsonify({'error': str(e) or 'Failed to upload manual thumbnail'}), 500
-
-@app.route('/api/pipeline/skip_thumbnail', methods=['POST'])
-def api_skip_thumbnail():
-    data = request.get_json(force=True, silent=True) or {}
-    video_id = (data.get('video_id') or '').strip()
-    vid = gemini_engine.extract_youtube_video_id(video_id)
-    if vid:
-        save_pipeline_record(vid, {
-            "thumbnail_status": "skipped",
-            "thumbnail_error": None
-        })
-    return jsonify({'success': True, 'message': 'Thumbnail stage skipped.'}), 200
-
-@app.route('/api/gemini/analyze_youtube_video', methods=['POST'])
-def gemini_analyze_youtube_video():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        url_or_id = (data.get('video_id') or data.get('video_url') or '').strip()
-        instructions = (data.get('instructions') or '').strip()
-        format_type = (data.get('format_type') or 'Auto').strip()
-        ch_id = get_active_channel_id_or_default(data.get('channel_id'))
-        existing_meta = data.get('existing_meta')
-
-        if not url_or_id:
-            return jsonify({'error': 'Please provide a YouTube Video URL or Video ID'}), 400
-
-        vid = gemini_engine.extract_youtube_video_id(url_or_id)
-        if not vid:
-            return jsonify({'error': f"Invalid YouTube URL or ID: '{url_or_id}'"}), 400
-
-        yt_service = None
-        creds = get_stored_credentials()
-        if creds:
-            try:
-                yt_service = build('youtube', 'v3', credentials=creds)
-            except Exception as se:
-                print(f"[YouTube Service Notice] {se}")
-                yt_service = None
-
-        force_refresh = bool(data.get('force_refresh', False))
-
-        metadata = gemini_engine.analyze_youtube_video_with_gemini(
-            video_id_or_url=vid,
-            format_type=format_type,
-            custom_instructions=instructions,
-            channel_id=ch_id,
-            youtube_service=yt_service,
-            existing_video_meta=existing_meta,
-            force_refresh=force_refresh
-        )
-        # Persist analysis state for resumable pipeline
-        save_pipeline_record(vid, {
-            "analysis_status": "completed",
-            "analysis_timestamp": time.time(),
-            "model_used": metadata.get("model_used", "gemini-3.8-flash"),
-            "analysis_result": metadata,
-            "generated_title": metadata.get("title") or metadata.get("viral_title", ""),
-            "generated_description": metadata.get("description", ""),
-            "generated_tags": metadata.get("tags", []),
-            "generated_hashtags": metadata.get("hashtags", []),
-            "category_id": metadata.get("category_id", "24"),
-            "category_name": metadata.get("category_name", "Entertainment"),
-            "timestamps": metadata.get("timestamps", []),
-            "language": metadata.get("language", "Hindi / English"),
-            "summary": metadata.get("summary", ""),
-            "thumbnail_concept": metadata.get("thumbnail_concept", ""),
-            "thumbnail_prompt": metadata.get("thumbnail_prompt", ""),
-            "last_successful_stage": "analysis",
-            "youtube_update_status": "pending",
-            "thumbnail_status": metadata.get("thumbnail_status", "pending"),
-            "thumbnail_error": metadata.get("thumbnail_error"),
-            "publish_status": "pending",
-            "privacy_status": metadata.get("privacy_status", "PRIVATE")
-        })
-
-        return jsonify(metadata), 200
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error in gemini_analyze_youtube_video: {e}")
-        return jsonify({'error': str(e) or 'Failed to analyze YouTube video'}), 500
-
-@app.route('/api/youtube/publish_optimized_video', methods=['POST'])
-def publish_optimized_video():
-    try:
-        creds = get_stored_credentials()
-        if not creds:
-            return jsonify({'error': 'Unauthorized. Please connect your YouTube account first.'}), 401
-
-        data = request.get_json(force=True, silent=True) or {}
-        video_id = (data.get('video_id') or '').strip()
-        if not video_id:
-            return jsonify({'error': 'Missing video_id parameter'}), 400
-
-        title = (data.get('title') or '').strip()
-        description = (data.get('description') or '').strip()
-        raw_tags = data.get('tags', [])
-        if isinstance(raw_tags, str):
-            tags = [t.strip() for t in raw_tags.split(',') if t.strip()]
-        elif isinstance(raw_tags, list):
-            tags = [str(t).strip() for t in raw_tags if str(t).strip()]
-        else:
-            tags = []
-
-        category_id = str(data.get('category_id') or '24')
-        action = (data.get('action') or 'publish').lower()
-        privacy = (data.get('privacy') or ('preserve' if action == 'apply' else 'public')).lower()
-        made_for_kids = bool(data.get('made_for_kids', False))
-        thumbnail_filename = (data.get('thumbnail_filename') or '').strip()
-
-        youtube = build('youtube', 'v3', credentials=creds)
-
-        # 1. Update Video Metadata & Privacy
-        # If action is 'apply' or privacy is 'preserve': update snippet ONLY, leaving privacyStatus untouched
-        if action == 'apply' or privacy == 'preserve':
-            body = {
-                'id': video_id,
-                'snippet': {
-                    'title': title[:100] if title else f"Video {video_id}",
-                    'description': description[:5000],
-                    'tags': tags[:50],
-                    'categoryId': category_id
-                }
-            }
-            youtube.videos().update(
-                part='snippet',
-                body=body
-            ).execute()
-            status_msg = "Changes applied to YouTube (privacy preserved)!"
-            resulting_privacy = "preserved"
-            save_pipeline_record(video_id, {
-                "youtube_update_status": "completed",
-                "youtube_update_timestamp": time.time(),
-                "youtube_update_error": None,
-                "last_successful_stage": "metadata",
-                "generated_title": title,
-                "generated_description": description,
-                "generated_tags": tags,
-                "category_id": category_id
-            })
-        else:
-            # Explicit publish: update snippet and set privacyStatus = 'public'
-            body = {
-                'id': video_id,
-                'snippet': {
-                    'title': title[:100] if title else f"Video {video_id}",
-                    'description': description[:5000],
-                    'tags': tags[:50],
-                    'categoryId': category_id
-                },
-                'status': {
-                    'privacyStatus': 'public' if privacy == 'public' else privacy,
-                    'selfDeclaredMadeForKids': made_for_kids
-                }
-            }
-            youtube.videos().update(
-                part='snippet,status',
-                body=body
-            ).execute()
-            status_msg = "Video successfully published PUBLIC on YouTube!"
-            resulting_privacy = "public"
-            save_pipeline_record(video_id, {
-                "publish_status": "published",
-                "publish_timestamp": time.time(),
-                "publish_error": None,
-                "last_successful_stage": "published",
-                "privacy_status": "PUBLIC"
-            })
-
-        # 2. Upload 4K Nano Banana Thumbnail if provided
-        thumb_updated = False
-        thumb_err = None
-        if thumbnail_filename:
-            if '/' in thumbnail_filename or '\\' in thumbnail_filename:
-                thumbnail_filename = os.path.basename(thumbnail_filename)
-            thumb_path = os.path.join(gemini_engine.THUMBNAILS_DIR, secure_filename(thumbnail_filename))
-            if os.path.exists(thumb_path):
-                try:
-                    from googleapiclient.http import MediaFileUpload
-                    media = MediaFileUpload(thumb_path, mimetype='image/jpeg', resumable=False)
-                    youtube.thumbnails().set(
-                        videoId=video_id,
-                        media_body=media
-                    ).execute()
-                    thumb_updated = True
-                except Exception as te:
-                    thumb_err = str(te)
-                    if "uploadForbidden" in thumb_err or "403" in thumb_err:
-                        thumb_err = "YouTube custom thumbnail upload requires phone verification at youtube.com/verify."
-                    print(f"Notice setting thumbnail on YouTube: {te}")
-
-        return jsonify({
-            'success': True,
-            'video_id': video_id,
-            'video_url': f"https://youtu.be/{video_id}",
-            'privacy': resulting_privacy,
-            'category_id': category_id,
-            'thumbnail_updated': thumb_updated,
-            'thumbnail_notice': thumb_err,
-            'message': status_msg
-        }), 200
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error publishing/updating video: {e}")
-        return jsonify({'error': str(e) or 'Failed to update video on YouTube'}), 500
 
 # ==============================================
 # YOUTUBE CHUNKED UPLOAD PIPELINE
@@ -5952,39 +3590,10 @@ def execute_youtube_upload(task_id, creds_dict, video_path, thumb_path, title, d
         )
 
         response = None
-        max_retries = 10
-        retry_count = 0
-
         while response is None:
-            try:
-                status, response = insert_request.next_chunk()
-                if status:
-                    progress_val = float(status.progress())
-                    upload_tasks[task_id]['progress'] = progress_val
-                    upload_tasks[task_id]['status'] = 'uploading'
-                    upload_tasks[task_id]['status_text'] = f"Streaming to YouTube: {int(progress_val * 100)}% complete"
-                retry_count = 0  # Reset retry count on successful chunk transmission
-            except HttpError as err:
-                if err.resp.status in [500, 502, 503, 504]:
-                    retry_count += 1
-                    if retry_count > max_retries:
-                        raise err
-                    sleep_time = min(2 ** retry_count, 60)
-                    msg = f"Transient YouTube server error ({err.resp.status}). Auto-resuming in {sleep_time}s (attempt {retry_count}/{max_retries})..."
-                    print(msg)
-                    upload_tasks[task_id]['status_text'] = msg
-                    time.sleep(sleep_time)
-                else:
-                    raise err
-            except (socket.error, socket.timeout, ConnectionResetError, http.client.RemoteDisconnected, httplib2.ServerNotFoundError, ssl.SSLError, Exception) as net_err:
-                retry_count += 1
-                if retry_count > max_retries:
-                    raise net_err
-                sleep_time = min(2 ** retry_count, 60)
-                msg = f"Network interruption detected. Resuming upload in {sleep_time}s (attempt {retry_count}/{max_retries})..."
-                print(msg)
-                upload_tasks[task_id]['status_text'] = msg
-                time.sleep(sleep_time)
+            status, response = insert_request.next_chunk()
+            if status:
+                upload_tasks[task_id]['progress'] = status.progress()
 
         video_id = response['id']
         upload_tasks[task_id]['video_id'] = video_id
@@ -5995,7 +3604,7 @@ def execute_youtube_upload(task_id, creds_dict, video_path, thumb_path, title, d
             try:
                 youtube.thumbnails().set(
                     videoId=video_id,
-                    media_body=MediaFileUpload(thumb_path, mimetype='image/jpeg', resumable=False)
+                    media_body=MediaFileUpload(thumb_path)
                 ).execute()
             except Exception as te:
                 print(f"Thumbnail upload notice (may require verified channel): {te}")
@@ -6100,10 +3709,32 @@ def upload_status(task_id):
         return jsonify({'error': 'Task not found'}), 404
     return jsonify(task)
 
+@app.route('/health', methods=['GET', 'HEAD'])
+def health():
+    """Universal health check route returning 200 OK for Render and MCP monitoring."""
+    return jsonify({
+        'status': 'ok',
+        'service': 'youtube-creator-studio-pro',
+        'mcp_sse_endpoint': '/sse',
+        'mcp_alias_endpoint': '/mcp'
+    }), 200
+
+# Expose underlying Flask app
+flask_app = app
+
+# Initialize Universal Model Context Protocol (MCP) ASGI Server with FastMCP SSE transport
+from mcp_server import create_mcp_asgi_app
+asgi_app = create_mcp_asgi_app(flask_app)
 
 if __name__ == '__main__':
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
     print("="*60)
-    print("YouTube Creator Studio Pro + Gemini AI Copilot running at http://localhost:5000")
+    print("YouTube Creator Studio Pro + Gemini AI Copilot + Universal MCP SSE Server")
     print("Target Account: shoaibgh473@gmail.com")
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    print(f"Binding to 0.0.0.0:{port}")
+    print(f"Health Check: http://0.0.0.0:{port}/health")
+    print(f"MCP SSE Endpoint: http://0.0.0.0:{port}/sse")
+    print(f"MCP Alias Endpoint: http://0.0.0.0:{port}/mcp")
+    print("="*60)
+    uvicorn.run(asgi_app, host='0.0.0.0', port=port, log_level='info')

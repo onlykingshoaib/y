@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Creator Studio Pro + Universal MCP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0f0f0f;
+            --bg-surface: #1f1f1f;
+            --bg-elevated: #282828;
+            --bg-input: #121212;
+            --border-color: #383838;
+            --accent-red: #ff0000;
+            --accent-red-hover: #cc0000;
+            --accent-blue: #3ea6ff;
+            --accent-green: #2ba640;
+            --text-primary: #f1f1f1;
+            --text-secondary: #aaaaaa;
+            --text-muted: #717171;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Top Navigation Header */
+        header.top-nav {
+            background-color: var(--bg-surface);
+            border-bottom: 1px solid var(--border-color);
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .brand-cluster {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+            color: #fff;
+            font-weight: 700;
+            font-size: 18px;
+        }
+
+        .mcp-status-pill {
+            background: rgba(43, 166, 64, 0.15);
+            border: 1px solid rgba(43, 166, 64, 0.4);
+            color: #4ade80;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .mcp-status-pill:hover {
+            background: rgba(43, 166, 64, 0.25);
+            border-color: #4ade80;
+        }
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #22c55e;
+            box-shadow: 0 0 8px #22c55e;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.85); }
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .account-badge {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .account-avatar-sm {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: var(--accent-red);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .btn-disconnect {
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .btn-disconnect:hover {
+            background: #2a2a2a;
+            color: #fff;
+        }
+
+        /* Layout Grid */
+        .studio-container {
+            display: grid;
+            grid-template-columns: 290px 1fr;
+            gap: 24px;
+            padding: 24px;
+            max-width: 1600px;
+            width: 100%;
+            margin: 0 auto;
+            flex: 1;
+        }
+
+        @media (max-width: 1024px) {
+            .studio-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Sidebar Channel Info */
+        aside.sidebar-channel {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+        }
+
+        .channel-header {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .channel-avatar {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            background: #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 12px;
+            border: 2px solid var(--border-color);
+            overflow: hidden;
+        }
+        .channel-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .channel-name {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .channel-handle {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .stat-item {
+            background-color: var(--bg-base);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 12px;
+            text-align: center;
+        }
+        .stat-val {
+            font-size: 18px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .stat-lbl {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 4px;
+        }
+
+        .quota-box {
+            margin-top: 16px;
+            background: var(--bg-base);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 12px;
+        }
+        .quota-bar-track {
+            height: 6px;
+            background: #2a2a2a;
+            border-radius: 3px;
+            margin: 8px 0;
+            overflow: hidden;
+        }
+        .quota-bar-fill {
+            height: 100%;
+            width: 16%;
+            background: #22c55e;
+            border-radius: 3px;
+        }
+
+        /* Main Workspace */
+        main.workspace-content {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 18px;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Upload Form */
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 24px;
+        }
+        @media (max-width: 850px) {
+            .form-grid { grid-template-columns: 1fr; }
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+        }
+        .form-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+        }
+        .char-count {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        input[type="text"], textarea, select {
+            width: 100%;
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: #fff;
+            padding: 12px 14px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+            font-family: inherit;
+        }
+        input[type="text"]:focus, textarea:focus, select:focus {
+            border-color: var(--accent-red);
+        }
+        textarea {
+            resize: vertical;
+            min-height: 110px;
+        }
+
+        /* Tag Chips */
+        .tags-wrapper {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            min-height: 48px;
+            align-items: center;
+        }
+        .tags-wrapper:focus-within {
+            border-color: var(--accent-red);
+        }
+        .tag-chip {
+            background-color: #2b2b2b;
+            color: #e5e5e5;
+            padding: 4px 10px;
+            border-radius: 14px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .tag-chip-remove {
+            cursor: pointer;
+            color: #999;
+            font-weight: bold;
+        }
+        .tag-chip-remove:hover { color: #fff; }
+        .tag-input-field {
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #fff;
+            font-size: 13px;
+            flex: 1;
+            min-width: 100px;
+            padding: 4px 6px;
+        }
+
+        /* Dropzones */
+        .dropzone-box {
+            border: 2px dashed var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 24px;
+            text-align: center;
+            background: var(--bg-input);
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .dropzone-box:hover {
+            border-color: var(--accent-red);
+            background: #181818;
+        }
+        .dropzone-box input[type="file"] {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .thumb-preview-wrap {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #151515;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--border-color);
+            margin-top: 10px;
+        }
+        .thumb-preview-wrap img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .btn-publish {
+            background-color: var(--accent-red);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 14px 24px;
+            font-size: 15px;
+            font-weight: 700;
+            width: 100%;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 10px;
+        }
+        .btn-publish:hover {
+            background-color: var(--accent-red-hover);
+        }
+        .btn-publish:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+
+        /* Recent Channel Uploads Grid */
+        .videos-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 18px;
+            margin-top: 14px;
+        }
+
+        .video-card {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            transition: transform 0.2s, border-color 0.2s;
+            display: flex;
+            flex-direction: column;
+            cursor: pointer;
+        }
+        .video-card:hover {
+            transform: translateY(-2px);
+            border-color: #555;
+        }
+
+        .card-thumb-wrap {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #121212;
+            overflow: hidden;
+        }
+        .card-thumb-wrap img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .privacy-tag {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(0,0,0,0.8);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .privacy-public { color: #4ade80; }
+        .privacy-unlisted { color: #facc15; }
+        .privacy-private { color: #f87171; }
+
+        .card-body {
+            padding: 12px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .card-title {
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.4;
+            margin-bottom: 8px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .card-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 8px;
+        }
+
+        .card-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .btn-edit-video {
+            flex: 1;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+        .btn-edit-video:hover {
+            background: #333;
+            border-color: var(--accent-red);
+        }
+        .btn-watch-link {
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--accent-blue);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-watch-link:hover {
+            background: rgba(62, 166, 255, 0.1);
+        }
+
+        /* EDIT VIDEO MODAL (FULL POPUP SCREEN) */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            width: 100%;
+            max-width: 960px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+            animation: modalFadeIn 0.25s ease-out;
+            overflow: hidden;
+        }
+        @keyframes modalFadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .modal-header {
+            padding: 18px 24px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .modal-title-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .modal-vid-badge {
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--accent-blue);
+            font-family: monospace;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .btn-close-modal {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 24px;
+            cursor: pointer;
+            line-height: 1;
+        }
+        .btn-close-modal:hover { color: #fff; }
+
+        .modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .modal-footer {
+            padding: 16px 24px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--bg-surface);
+        }
+
+        .btn-save-edit {
+            background: var(--accent-red);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 24px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-save-edit:hover { background: var(--accent-red-hover); }
+        .btn-save-edit:disabled { background: #555; cursor: not-allowed; }
+
+        .btn-cancel-modal {
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            border-radius: 6px;
+            padding: 10px 18px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .btn-cancel-modal:hover { background: #2a2a2a; color: #fff; }
+
+        .toast-notification {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: #1f1f1f;
+            border: 1px solid var(--border-color);
+            color: #fff;
+            padding: 14px 20px;
+            border-radius: var(--radius-md);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 2000;
+        }
+        .toast-notification.success { border-left: 4px solid var(--accent-green); }
+        .toast-notification.error { border-left: 4px solid var(--accent-red); }
+    </style>
+</head>
+<body>
+
+    <!-- Header Navigation -->
+    <header class="top-nav">
+        <div class="brand-cluster">
+            <a href="/" class="brand-logo">
+                <svg style="width: 28px; height: 28px; fill: var(--accent-red);" viewBox="0 0 24 24"><path d="M21.58 7.19c-.23-.86-.91-1.54-1.77-1.77C18.25 5 12 5 12 5s-6.25 0-7.81.42c-.86.23-1.54.91-1.77 1.77C2 8.75 2 12 2 12s0 3.25.42 4.81c.23.86.91 1.54 1.77 1.77C5.75 19 12 19 12 19s6.25 0 7.81-.42c.86-.23 1.54-.91 1.77-1.77C22 15.25 22 12 22 12s0-3.25-.42-4.81zM10 15V9l5.2 3-5.2 3z"/></svg>
+                <span>YouTube Creator Studio Pro</span>
+            </a>
+            <div class="mcp-status-pill" id="mcpBadge" onclick="copyMcpUrl()" title="Click to copy Universal MCP SSE URL for Gemini / ChatGPT / Grok">
+                <span class="pulse-dot"></span>
+                <span>MCP SSE Active: /sse</span>
+            </div>
+        </div>
+
+        <div class="header-actions">
+            <div class="account-badge">
+                <div class="account-avatar-sm" id="navAvatarChar">S</div>
+                <span id="navAccountEmail">shoaibgh473@gmail.com</span>
+            </div>
+            <a href="/login" class="btn-disconnect">Switch / Re-login</a>
+        </div>
+    </header>
+
+    <!-- Main Studio Grid -->
+    <div class="studio-container">
+        
+        <!-- Left Sidebar: Channel Overview -->
+        <aside class="sidebar-channel">
+            <div class="card">
+                <div class="channel-header">
+                    <div class="channel-avatar" id="sidebarAvatar">S</div>
+                    <div class="channel-name" id="sidebarChannelTitle">Shoaib Gh</div>
+                    <div class="channel-handle" id="sidebarChannelHandle">@shoaibgh-l4f</div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-val" id="statSubs">226</div>
+                        <div class="stat-lbl">Subscribers</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-val" id="statViews">234</div>
+                        <div class="stat-lbl">Total Views</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-val" id="statVideos">11</div>
+                        <div class="stat-lbl">Videos</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-val" style="color: #4ade80;">Active</div>
+                        <div class="stat-lbl">API Status</div>
+                    </div>
+                </div>
+
+                <div class="quota-box">
+                    <div style="display: flex; justify-content: space-between; font-size: 12px;">
+                        <span>YouTube API Quota</span>
+                        <span style="color: #4ade80;">~16%</span>
+                    </div>
+                    <div class="quota-bar-track">
+                        <div class="quota-bar-fill"></div>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-muted);">
+                        Est. 1,600 / 10,000 units. Direct chunked resumable protocol is active.
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Right Main Workspace -->
+        <main class="workspace-content">
+            
+            <!-- SECTION 1: UPLOAD STUDIO -->
+            <div class="card">
+                <div class="section-header">
+                    <div class="section-title">
+                        <svg style="width: 22px; height: 22px; fill: var(--accent-red);" viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 15.01l1.41 1.41L11 14.84V19h2v-4.16l1.59 1.59L16 15.01 12.01 11 8 15.01z"/></svg>
+                        <span>Upload Video to YouTube</span>
+                    </div>
+                    <span style="font-size: 12px; color: var(--text-muted);">Direct YouTube Data API v3 Engine</span>
+                </div>
+
+                <form id="uploadForm">
+                    <div class="form-grid">
+                        
+                        <!-- Left Column: Title, Description, Tags, Privacy -->
+                        <div>
+                            <div class="form-group">
+                                <div class="form-label">
+                                    <span>Video Title <strong style="color: var(--accent-red);">*</strong></span>
+                                    <span class="char-count" id="uploadTitleCount">0 / 100</span>
+                                </div>
+                                <input type="text" id="uploadTitle" name="title" placeholder="Add a title that describes your video" maxlength="100" required>
+                            </div>
+
+                            <div class="form-group">
+                                <div class="form-label">
+                                    <span>Description</span>
+                                    <span class="char-count" id="uploadDescCount">0 / 5000</span>
+                                </div>
+                                <textarea id="uploadDesc" name="description" placeholder="Tell viewers about your video, add keywords, chapters, and hashtags..."></textarea>
+                            </div>
+
+                            <div class="form-group">
+                                <div class="form-label">
+                                    <span>Tags (Press Enter or Comma)</span>
+                                    <span style="font-size: 11px; color: var(--text-muted);">Max 500 chars</span>
+                                </div>
+                                <div class="tags-wrapper" id="uploadTagsWrapper">
+                                    <input type="text" class="tag-input-field" id="uploadTagInput" placeholder="Add tags...">
+                                </div>
+                                <input type="hidden" name="tags" id="uploadHiddenTags">
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                                <div class="form-group">
+                                    <label class="form-label">Privacy Visibility</label>
+                                    <select name="privacy" id="uploadPrivacy">
+                                        <option value="public" selected>Public</option>
+                                        <option value="unlisted">Unlisted</option>
+                                        <option value="private">Private</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Category</label>
+                                    <select name="category_id" id="uploadCategory">
+                                        <option value="22" selected>People & Blogs</option>
+                                        <option value="24">Entertainment</option>
+                                        <option value="20">Gaming</option>
+                                        <option value="28">Science & Technology</option>
+                                        <option value="27">Education</option>
+                                        <option value="1">Film & Animation</option>
+                                        <option value="10">Music</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Video File & Thumbnail -->
+                        <div>
+                            <div class="form-group">
+                                <label class="form-label">Select Video File <strong style="color: var(--accent-red);">*</strong></label>
+                                <div class="dropzone-box" id="videoDropzone">
+                                    <input type="file" name="video_file" id="videoFileInput" accept="video/mp4,video/x-matroska,video/quicktime,video/webm" required>
+                                    <div style="font-size: 28px; margin-bottom: 6px;">🎬</div>
+                                    <div style="font-size: 14px; font-weight: 500;" id="videoDropzoneText">Click or Drag Video Here</div>
+                                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">MP4, MKV, MOV, WebM Supported</div>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Custom Thumbnail (Optional)</label>
+                                <div class="dropzone-box" id="thumbDropzone" style="padding: 16px;">
+                                    <input type="file" name="thumbnail_file" id="thumbFileInput" accept="image/jpeg,image/png">
+                                    <div style="font-size: 20px; margin-bottom: 4px;">🖼️</div>
+                                    <div style="font-size: 13px;" id="thumbDropzoneText">Choose Image File</div>
+                                </div>
+                                <div class="thumb-preview-wrap" id="thumbPreviewWrap" style="display: none;">
+                                    <img id="thumbPreviewImg" src="" alt="Thumbnail Preview">
+                                </div>
+                            </div>
+
+                            <button type="submit" class="btn-publish" id="btnPublish">
+                                🚀 Publish to YouTube Channel
+                            </button>
+                        </div>
+                    </div>
+                </form>
+
+                <!-- Upload Progress Status -->
+                <div id="uploadProgressCard" style="display: none; margin-top: 16px; background: #151515; border: 1px solid var(--border-color); border-radius: 8px; padding: 16px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 8px;">
+                        <span id="uploadStatusText">Uploading to YouTube...</span>
+                        <span id="uploadPercentText">0%</span>
+                    </div>
+                    <div style="height: 6px; background: #282828; border-radius: 3px; overflow: hidden;">
+                        <div id="uploadProgressBar" style="height: 100%; width: 0%; background: var(--accent-red); transition: width 0.3s;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 2: RECENT CHANNEL UPLOADS -->
+            <div class="card">
+                <div class="section-header">
+                    <div class="section-title">
+                        <svg style="width: 22px; height: 22px; fill: var(--text-secondary);" viewBox="0 0 24 24"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/></svg>
+                        <span>Recent Channel Uploads</span>
+                    </div>
+                    <button id="btnRefreshVideos" style="background: none; border: 1px solid var(--border-color); color: var(--text-secondary); padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        🔄 Refresh List
+                    </button>
+                </div>
+
+                <div class="videos-grid" id="recentVideosGrid">
+                    <div style="color: var(--text-muted); font-size: 13px; padding: 20px;">Loading channel videos...</div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- EDIT VIDEO & METADATA MODAL (OPENS ON CLICKING ANY VIDEO) -->
+    <!-- ======================================================== -->
+    <div class="modal-overlay" id="editModalOverlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span style="font-size: 18px; font-weight: 700;">✏️ Edit YouTube Video & Metadata</span>
+                    <span class="modal-vid-badge" id="modalVideoIdBadge">ID: ...</span>
+                </div>
+                <button class="btn-close-modal" onclick="closeEditModal()">×</button>
+            </div>
+
+            <div class="modal-body">
+                <div class="form-grid">
+                    
+                    <!-- Left: Metadata inputs -->
+                    <div>
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Video Title</span>
+                                <span class="char-count" id="editTitleCount">0 / 100</span>
+                            </div>
+                            <input type="text" id="editTitle" maxlength="100" placeholder="Video title">
+                        </div>
+
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Description (Hashtags, Chapters, Links)</span>
+                                <span class="char-count" id="editDescCount">0 / 5000</span>
+                            </div>
+                            <textarea id="editDesc" rows="6" placeholder="Video description"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <div class="form-label">
+                                <span>Tags / Keywords (Press Enter or Comma)</span>
+                                <span style="font-size: 11px; color: var(--text-muted);">Max 500 chars</span>
+                            </div>
+                            <div class="tags-wrapper" id="editTagsWrapper">
+                                <input type="text" class="tag-input-field" id="editTagInput" placeholder="Add tags...">
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                            <div class="form-group">
+                                <label class="form-label">Visibility</label>
+                                <select id="editPrivacy">
+                                    <option value="public">Public</option>
+                                    <option value="unlisted">Unlisted</option>
+                                    <option value="private">Private</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Category</label>
+                                <select id="editCategory">
+                                    <option value="22">People & Blogs</option>
+                                    <option value="24">Entertainment</option>
+                                    <option value="20">Gaming</option>
+                                    <option value="28">Science & Technology</option>
+                                    <option value="27">Education</option>
+                                    <option value="1">Film & Animation</option>
+                                    <option value="10">Music</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Thumbnail and actions -->
+                    <div>
+                        <div class="form-group">
+                            <label class="form-label">Current Thumbnail</label>
+                            <div class="thumb-preview-wrap">
+                                <img id="editCurrentThumbImg" src="" alt="Video Thumbnail">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Upload New Custom Thumbnail</label>
+                            <div class="dropzone-box" style="padding: 16px;">
+                                <input type="file" id="editThumbFileInput" accept="image/jpeg,image/png">
+                                <div style="font-size: 18px; margin-bottom: 4px;">🖼️</div>
+                                <div style="font-size: 13px;" id="editThumbFilenameText">Select New Image</div>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(62, 166, 255, 0.1); border: 1px solid rgba(62, 166, 255, 0.3); border-radius: 6px; padding: 12px; font-size: 12px; color: #93c5fd; margin-top: 14px;">
+                            💡 <strong>Direct YouTube Sync:</strong> Saving changes updates the title, description, tags, and thumbnail on your live YouTube video immediately via YouTube Data API.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn-cancel-modal" onclick="closeEditModal()">Cancel</button>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <span id="modalSaveSpinner" style="display: none; font-size: 13px; color: var(--text-muted);">Saving to YouTube...</span>
+                    <button type="button" class="btn-save-edit" id="btnSaveEditVideo" onclick="submitVideoEdits()">
+                        💾 Save Changes to YouTube
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast-notification" id="toast">
+        <span id="toastMessage">Success</span>
+    </div>
+
+    <script>
+        // Tag management helper
+        function setupTagsManager(wrapperId, inputId, hiddenId, initialTags = []) {
+            const wrapper = document.getElementById(wrapperId);
+            const input = document.getElementById(inputId);
+            let tags = [...initialTags];
+
+            function render() {
+                wrapper.querySelectorAll('.tag-chip').forEach(c => c.remove());
+                tags.forEach((tag, idx) => {
+                    const chip = document.createElement('div');
+                    chip.className = 'tag-chip';
+                    chip.innerHTML = `<span>${tag}</span><span class="tag-chip-remove" data-idx="${idx}">&times;</span>`;
+                    wrapper.insertBefore(chip, input);
+                });
+                if (hiddenId) {
+                    const hidden = document.getElementById(hiddenId);
+                    if (hidden) hidden.value = tags.join(',');
+                }
+            }
+
+            wrapper.addEventListener('click', (e) => {
+                if (e.target.classList.contains('tag-chip-remove')) {
+                    const idx = parseInt(e.target.getAttribute('data-idx'));
+                    tags.splice(idx, 1);
+                    render();
+                } else {
+                    input.focus();
+                }
+            });
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    const val = input.value.trim().replace(/^,+|,+$/g, '');
+                    if (val && !tags.includes(val)) {
+                        tags.push(val);
+                        input.value = '';
+                        render();
+                    }
+                } else if (e.key === 'Backspace' && input.value === '' && tags.length > 0) {
+                    tags.pop();
+                    render();
+                }
+            });
+
+            render();
+            return {
+                getTags: () => tags,
+                setTags: (newTags) => { tags = [...newTags]; render(); }
+            };
+        }
+
+        // Initialize Upload Form Tags
+        const uploadTagsManager = setupTagsManager('uploadTagsWrapper', 'uploadTagInput', 'uploadHiddenTags');
+        let editTagsManager = null;
+        let currentEditingVideoId = null;
+
+        // Character counters
+        function bindCounter(inputId, counterId, max) {
+            const el = document.getElementById(inputId);
+            const count = document.getElementById(counterId);
+            el.addEventListener('input', () => {
+                count.textContent = `${el.value.length} / ${max}`;
+            });
+        }
+        bindCounter('uploadTitle', 'uploadTitleCount', 100);
+        bindCounter('uploadDesc', 'uploadDescCount', 5000);
+        bindCounter('editTitle', 'editTitleCount', 100);
+        bindCounter('editDesc', 'editDescCount', 5000);
+
+        // Thumbnail file previews
+        document.getElementById('thumbFileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                document.getElementById('thumbDropzoneText').textContent = file.name;
+                const r = new FileReader();
+                r.onload = (ev) => {
+                    document.getElementById('thumbPreviewImg').src = ev.target.result;
+                    document.getElementById('thumbPreviewWrap').style.display = 'flex';
+                };
+                r.readAsDataURL(file);
+            }
+        });
+
+        document.getElementById('videoFileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                document.getElementById('videoDropzoneText').textContent = `Selected: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`;
+            }
+        });
+
+        // Toast feedback
+        function showToast(msg, type = 'success') {
+            const t = document.getElementById('toast');
+            t.className = `toast-notification ${type}`;
+            document.getElementById('toastMessage').textContent = msg;
+            t.style.display = 'flex';
+            setTimeout(() => { t.style.display = 'none'; }, 4000);
+        }
+
+        // Copy MCP SSE URL
+        function copyMcpUrl() {
+            const url = `${window.location.origin}/sse`;
+            navigator.clipboard.writeText(url).then(() => {
+                showToast(`Copied MCP SSE URL: ${url}`, 'success');
+            }).catch(() => {
+                prompt("Universal MCP SSE URL:", url);
+            });
+        }
+
+        // Load Channel Overview
+        async function loadChannelDetails() {
+            try {
+                const res = await fetch('/api/channel_details');
+                const data = await res.json();
+                if (data && data.channel) {
+                    document.getElementById('sidebarChannelTitle').textContent = data.channel.title || 'Shoaib Gh';
+                    document.getElementById('sidebarChannelHandle').textContent = data.channel.customUrl || '@shoaibgh-l4f';
+                    document.getElementById('statSubs').textContent = Number(data.channel.subscriberCount || 226).toLocaleString();
+                    document.getElementById('statViews').textContent = Number(data.channel.viewCount || 234).toLocaleString();
+                    document.getElementById('statVideos').textContent = data.channel.videoCount || 11;
+                    if (data.channel.thumbnails && data.channel.thumbnails.default) {
+                        document.getElementById('sidebarAvatar').innerHTML = `<img src="${data.channel.thumbnails.default.url}" alt="Avatar">`;
+                    }
+                }
+            } catch (e) {
+                console.error("Channel details error:", e);
+            }
+        }
+
+        // Load Recent Channel Uploads
+        async function loadRecentVideos() {
+            const grid = document.getElementById('recentVideosGrid');
+            try {
+                const res = await fetch('/api/recent_videos');
+                const videos = await res.json();
+                if (!videos || videos.length === 0) {
+                    grid.innerHTML = '<div style="color: var(--text-muted); font-size: 13px; padding: 20px;">No recent videos found on channel.</div>';
+                    return;
+                }
+
+                grid.innerHTML = videos.map(v => `
+                    <div class="video-card" onclick="openEditModal('${v.id}')">
+                        <div class="card-thumb-wrap">
+                            <img src="${v.thumbnail || ''}" alt="${v.title}">
+                            <span class="privacy-tag privacy-${(v.privacy || 'public').toLowerCase()}">${v.privacy}</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="card-title" title="${v.title}">${v.title}</div>
+                            <div class="card-meta">
+                                <span>${v.publishedAt ? new Date(v.publishedAt).toLocaleDateString() : 'Uploaded'}</span>
+                                <span style="font-family: monospace;">${v.id}</span>
+                            </div>
+                            <div class="card-actions" onclick="event.stopPropagation()">
+                                <button type="button" class="btn-edit-video" onclick="openEditModal('${v.id}')">
+                                    ✏️ Edit Video & Metadata
+                                </button>
+                                <a href="https://youtu.be/${v.id}" target="_blank" class="btn-watch-link" title="Watch on YouTube">
+                                    Watch ↗
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                grid.innerHTML = '<div style="color: var(--text-muted); font-size: 13px; padding: 20px;">Unable to fetch channel videos.</div>';
+            }
+        }
+        document.getElementById('btnRefreshVideos').addEventListener('click', loadRecentVideos);
+
+        // ========================================================
+        // EDIT VIDEO MODAL LOGIC (OPEN, POPULATE, UPDATE YOUTUBE)
+        // ========================================================
+        async function openEditModal(videoId) {
+            currentEditingVideoId = videoId;
+            document.getElementById('modalVideoIdBadge').textContent = `ID: ${videoId}`;
+            document.getElementById('editModalOverlay').classList.add('active');
+
+            // Reset inputs
+            document.getElementById('editTitle').value = 'Loading video details...';
+            document.getElementById('editDesc').value = '';
+            document.getElementById('editThumbFileInput').value = '';
+            document.getElementById('editThumbFilenameText').textContent = 'Select New Image';
+            document.getElementById('btnSaveEditVideo').disabled = true;
+
+            try {
+                const res = await fetch(`/api/video/${videoId}`);
+                const data = await res.json();
+                if (data.error) {
+                    showToast(data.error, 'error');
+                    closeEditModal();
+                    return;
+                }
+
+                document.getElementById('editTitle').value = data.title || '';
+                document.getElementById('editDesc').value = data.description || '';
+                document.getElementById('editPrivacy').value = (data.privacy || 'public').toLowerCase();
+                document.getElementById('editCategory').value = data.categoryId || '22';
+                document.getElementById('editCurrentThumbImg').src = data.thumbnail || '';
+
+                document.getElementById('editTitleCount').textContent = `${(data.title || '').length} / 100`;
+                document.getElementById('editDescCount').textContent = `${(data.description || '').length} / 5000`;
+
+                // Setup edit tags manager
+                editTagsManager = setupTagsManager('editTagsWrapper', 'editTagInput', null, data.tags || []);
+                document.getElementById('btnSaveEditVideo').disabled = false;
+
+            } catch (e) {
+                showToast("Failed to fetch video details from YouTube.", 'error');
+                closeEditModal();
+            }
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModalOverlay').classList.remove('active');
+            currentEditingVideoId = null;
+        }
+
+        // Live preview for new thumbnail in Edit Modal
+        document.getElementById('editThumbFileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                document.getElementById('editThumbFilenameText').textContent = file.name;
+                const r = new FileReader();
+                r.onload = (ev) => {
+                    document.getElementById('editCurrentThumbImg').src = ev.target.result;
+                };
+                r.readAsDataURL(file);
+            }
+        });
+
+        // Submit Video Edits to YouTube API
+        async function submitVideoEdits() {
+            if (!currentEditingVideoId) return;
+            const btn = document.getElementById('btnSaveEditVideo');
+            const spinner = document.getElementById('modalSaveSpinner');
+            btn.disabled = true;
+            spinner.style.display = 'inline-block';
+
+            const payload = {
+                video_id: currentEditingVideoId,
+                title: document.getElementById('editTitle').value.trim(),
+                description: document.getElementById('editDesc').value,
+                tags: editTagsManager ? editTagsManager.getTags() : [],
+                category_id: document.getElementById('editCategory').value,
+                privacy_status: document.getElementById('editPrivacy').value
+            };
+
+            try {
+                // 1. Update Video Snippet / Status
+                const res = await fetch('/api/video/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                // 2. Upload New Thumbnail if selected
+                const thumbFile = document.getElementById('editThumbFileInput').files[0];
+                if (thumbFile) {
+                    const fd = new FormData();
+                    fd.append('video_id', currentEditingVideoId);
+                    fd.append('thumbnail_file', thumbFile);
+                    const tRes = await fetch('/api/video/thumbnail', {
+                        method: 'POST',
+                        body: fd
+                    });
+                    const tData = await tRes.json();
+                    if (tData.error) {
+                        showToast(`Metadata saved, but thumbnail notice: ${tData.error}`, 'error');
+                    }
+                }
+
+                showToast(`✅ Video '${currentEditingVideoId}' successfully updated on YouTube!`, 'success');
+                closeEditModal();
+                loadRecentVideos();
+            } catch (err) {
+                showToast(`Update failed: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                spinner.style.display = 'none';
+            }
+        }
+
+        // Upload Form Handler
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btnPublish');
+            btn.disabled = true;
+
+            const progressCard = document.getElementById('uploadProgressCard');
+            const pBar = document.getElementById('uploadProgressBar');
+            const pText = document.getElementById('uploadPercentText');
+            const pStatus = document.getElementById('uploadStatusText');
+
+            progressCard.style.display = 'block';
+            pBar.style.width = '10%';
+            pText.textContent = '10%';
+            pStatus.textContent = 'Buffering video to server...';
+
+            const fd = new FormData(this);
+            try {
+                const res = await fetch('/api/upload_start', {
+                    method: 'POST',
+                    body: fd
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
+                const taskId = data.task_id;
+                pStatus.textContent = 'Streaming chunked ingestion to YouTube...';
+
+                const interval = setInterval(async () => {
+                    try {
+                        const sRes = await fetch(`/api/upload_status/${taskId}`);
+                        const sData = await sRes.json();
+                        if (sData.status === 'completed') {
+                            clearInterval(interval);
+                            pBar.style.width = '100%';
+                            pText.textContent = '100%';
+                            pStatus.textContent = `✅ Successfully published to YouTube! (ID: ${sData.video_id})`;
+                            showToast(`Video uploaded successfully! ID: ${sData.video_id}`, 'success');
+                            btn.disabled = false;
+                            loadRecentVideos();
+                        } else if (sData.status === 'error') {
+                            clearInterval(interval);
+                            pStatus.textContent = `Upload error: ${sData.error}`;
+                            showToast(sData.error, 'error');
+                            btn.disabled = false;
+                        } else {
+                            const pct = Math.round((sData.progress || 0.2) * 100);
+                            pBar.style.width = `${pct}%`;
+                            pText.textContent = `${pct}%`;
+                        }
+                    } catch (pe) {
+                        console.error("Poll error:", pe);
+                    }
+                }, 1000);
+
+            } catch (err) {
+                showToast(`Upload failed: ${err.message}`, 'error');
+                btn.disabled = false;
+                progressCard.style.display = 'none';
+            }
+        });
+
+        // Initialize on page load
+        loadChannelDetails();
+        loadRecentVideos();
+    </script>
+</body>
+</html>
