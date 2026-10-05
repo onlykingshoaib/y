@@ -3127,6 +3127,10 @@ def save_credentials():
 
     return redirect('/authorize')
 
+@app.route('/login')
+def login():
+    return redirect('/authorize')
+
 @app.route('/authorize')
 def authorize():
     if not os.path.exists(CLIENT_SECRETS_FILE):
