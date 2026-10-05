@@ -3154,12 +3154,18 @@ def authorize():
     if login_hint:
         auth_params['login_hint'] = login_hint
 
+    STATE_DIR = os.path.join(BASE_DIR, "uploads", "oauth_states")
+    os.makedirs(STATE_DIR, exist_ok=True)
     authorization_url, state = flow.authorization_url(**auth_params)
     cv = getattr(flow, 'code_verifier', None)
     session['state'] = state
     session['code_verifier'] = cv
     if state and cv:
-        OAUTH_STATES[state] = cv
+        try:
+            with open(os.path.join(STATE_DIR, f"{state}.txt"), "w") as sf:
+                sf.write(cv)
+        except Exception as se_err:
+            print(f"State file write error: {se_err}")
     return redirect(authorization_url)
 
 @app.route('/switch_account')
@@ -3170,17 +3176,40 @@ def switch_account():
 
 @app.route('/oauth2callback')
 def oauth2callback():
+    STATE_DIR = os.path.join(BASE_DIR, "uploads", "oauth_states")
     state = request.args.get('state') or session.get('state')
+    cv = None
+    if state:
+        state_file = os.path.join(STATE_DIR, f"{state}.txt")
+        if os.path.exists(state_file):
+            try:
+                with open(state_file, "r") as sf:
+                    cv = sf.read().strip()
+                os.remove(state_file)
+            except Exception as re_err:
+                print(f"State file read error: {re_err}")
+    if not cv:
+        cv = session.get('code_verifier')
+
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE,
         scopes=SCOPES,
         state=state,
         redirect_uri=url_for('oauth2callback', _external=True)
     )
-    cv = OAUTH_STATES.pop(state, None) or session.get('code_verifier')
     if cv:
         flow.code_verifier = cv
-    flow.fetch_token(authorization_response=request.url)
+        try:
+            if hasattr(flow, 'oauth2session') and hasattr(flow.oauth2session, '_client'):
+                flow.oauth2session._client.code_verifier = cv
+        except Exception:
+            pass
+
+    fetch_kwargs = {"authorization_response": request.url}
+    if cv:
+        fetch_kwargs["code_verifier"] = cv
+
+    flow.fetch_token(**fetch_kwargs)
     credentials = flow.credentials
 
     # Fetch user email
