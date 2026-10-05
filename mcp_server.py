@@ -860,12 +860,357 @@ class UniversalCORSMiddleware:
 
 
 # ============================================================================
-# ASGI APPLICATION FACTORY
+# MCP TOOLS CATALOG (JSON SCHEMA FOR DIRECT JSON-RPC HTTP & SSE)
+# ============================================================================
+MCP_TOOLS_CATALOG = [
+    {
+        "name": "list_channel_videos",
+        "description": "Lists uploaded videos from the authenticated YouTube channel. Returns video IDs, titles, descriptions, tags, thumbnail URLs, and privacy status. Use this tool to inspect all existing videos before editing or optimizing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of videos to fetch (default: 15, max: 50).",
+                    "default": 15
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "get_video_details",
+        "description": "Retrieves full metadata for a specific YouTube video (title, description, tags, category, and statistics).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_id": {
+                    "type": "string",
+                    "description": "The 11-character YouTube video ID (e.g. '0zZgD9g5PQ8')."
+                }
+            },
+            "required": ["video_id"]
+        }
+    },
+    {
+        "name": "update_video_metadata",
+        "description": "Updates the title, description, tags, and category of an existing YouTube video directly on YouTube. Changes reflect immediately on YouTube.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_id": {
+                    "type": "string",
+                    "description": "The 11-character YouTube video ID to edit."
+                },
+                "title": {
+                    "type": "string",
+                    "description": "New video title (max 100 characters)."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "New video description (max 5000 characters)."
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of tags / keywords for the video."
+                },
+                "category_id": {
+                    "type": "string",
+                    "description": "YouTube category ID (e.g. '22' for People & Blogs, '28' for Science & Tech)."
+                }
+            },
+            "required": ["video_id"]
+        }
+    },
+    {
+        "name": "update_video_thumbnail",
+        "description": "Sets a new custom thumbnail image for a YouTube video. Provide either thumbnail_url (a publicly accessible image URL) or thumbnail_base64 (data URI or raw base64).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_id": {
+                    "type": "string",
+                    "description": "The 11-character YouTube video ID."
+                },
+                "thumbnail_url": {
+                    "type": "string",
+                    "description": "Public HTTP/HTTPS URL of the new thumbnail image (JPEG or PNG, recommended 1280x720)."
+                },
+                "thumbnail_base64": {
+                    "type": "string",
+                    "description": "Base64 encoded image string (or data:image/jpeg;base64,...) of the thumbnail."
+                }
+            },
+            "required": ["video_id"]
+        }
+    },
+    {
+        "name": "optimize_and_update_video",
+        "description": "Uses Gemini AI to analyze a video's current metadata, generates optimized high-ranking titles, descriptions, and hashtags, and applies the changes directly to YouTube.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_id": {
+                    "type": "string",
+                    "description": "The 11-character YouTube video ID to optimize."
+                },
+                "focus_keywords": {
+                    "type": "string",
+                    "description": "Optional focus keywords or target audience to guide the AI optimization."
+                },
+                "language": {
+                    "type": "string",
+                    "description": "Primary language for the optimization (default: 'en').",
+                    "default": "en"
+                }
+            },
+            "required": ["video_id"]
+        }
+    },
+    {
+        "name": "batch_optimize_channel_videos",
+        "description": "Iterates across multiple recent videos on your YouTube channel, generates AI-optimized metadata (titles, descriptions, tags, hashtags) for each, and applies updates directly.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "max_videos": {
+                    "type": "integer",
+                    "description": "Number of recent videos to optimize (default: 5, max: 20).",
+                    "default": 5
+                },
+                "focus_topic": {
+                    "type": "string",
+                    "description": "Optional channel topic or theme to focus optimizations around."
+                },
+                "update_thumbnails": {
+                    "type": "boolean",
+                    "description": "Whether to also trigger thumbnail regeneration where supported (default: false).",
+                    "default": False
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "optimize_video_metadata",
+        "description": "Generates high-CTR titles, SEO descriptions, tags, and hashtags using Gemini AI without directly updating YouTube. Use to preview recommendations.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Current draft title or video topic."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Current draft description or rough bullet points."
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Current tags or seed keywords."
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Target video category (default: 'People & Blogs').",
+                    "default": "People & Blogs"
+                }
+            },
+            "required": ["title"]
+        }
+    },
+    {
+        "name": "upload_to_youtube",
+        "description": "Stages and initiates a YouTube video upload with title, description, tags, category, and privacy status. Video file can be provided via video_url or uploaded directly.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Video title (max 100 chars)."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Video description with summary, timestamps, and hashtags."
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Keywords/tags for YouTube search indexing."
+                },
+                "category": {
+                    "type": "string",
+                    "description": "YouTube Category ID (e.g. '22' for People & Blogs, '28' for Science & Technology).",
+                    "default": "22"
+                },
+                "privacy_status": {
+                    "type": "string",
+                    "description": "Visibility: 'public', 'private', or 'unlisted'. Default: 'public'.",
+                    "default": "public"
+                },
+                "video_url": {
+                    "type": "string",
+                    "description": "Public URL where the video file can be downloaded for upload."
+                }
+            },
+            "required": ["title", "description"]
+        }
+    }
+]
+
+MCP_TOOL_FUNCTIONS = {
+    "list_channel_videos": list_channel_videos,
+    "get_video_details": get_video_details,
+    "update_video_metadata": update_video_metadata,
+    "update_video_thumbnail": update_video_thumbnail,
+    "optimize_and_update_video": optimize_and_update_video,
+    "batch_optimize_channel_videos": batch_optimize_channel_videos,
+    "optimize_video_metadata": optimize_video_metadata,
+    "upload_to_youtube": upload_to_youtube,
+}
+
+
+def handle_jsonrpc_sync(req_data: dict) -> Optional[dict]:
+    """Processes a single JSON-RPC 2.0 MCP request dict and returns the response dict,
+    or None if the request is a notification requiring no content body.
+    """
+    if not isinstance(req_data, dict):
+        return {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32600, "message": "Invalid Request: expected JSON object."}
+        }
+
+    method = req_data.get("method")
+    req_id = req_data.get("id")
+    params = req_data.get("params") or {}
+
+    print(f"[MCP JSON-RPC DISPATCH] method='{method}', id={req_id}", flush=True)
+
+    if method == "initialize":
+        client_proto = params.get("protocolVersion", "2024-11-05")
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": client_proto,
+                "capabilities": {
+                    "tools": {
+                        "listChanged": False
+                    },
+                    "resources": {},
+                    "prompts": {},
+                    "logging": {}
+                },
+                "serverInfo": {
+                    "name": "YouTube Creator Studio Pro",
+                    "version": "1.0.0"
+                }
+            }
+        }
+
+    elif method in ("notifications/initialized", "notifications/cancelled", "$/cancelRequest"):
+        if req_id is not None:
+            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+        return None
+
+    elif method == "ping":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {}
+        }
+
+    elif method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "tools": MCP_TOOLS_CATALOG
+            }
+        }
+
+    elif method == "tools/call":
+        tool_name = params.get("name")
+        arguments = params.get("arguments") or {}
+        tool_fn = MCP_TOOL_FUNCTIONS.get(tool_name)
+        if not tool_fn:
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {
+                    "code": -32601,
+                    "message": f"Tool '{tool_name}' not found."
+                }
+            }
+        try:
+            call_res = tool_fn(**arguments)
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": str(call_res)
+                        }
+                    ],
+                    "isError": False
+                }
+            }
+        except Exception as te:
+            print(f"[MCP TOOL CALL ERROR] {tool_name}: {te}", flush=True)
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Tool execution error: {str(te)}"
+                        }
+                    ],
+                    "isError": True
+                }
+            }
+
+    elif method in ("resources/list", "resources/templates/list"):
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"resources": []}
+        }
+
+    elif method == "prompts/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"prompts": []}
+        }
+
+    else:
+        print(f"[MCP UNKNOWN METHOD] '{method}'", flush=True)
+        if req_id is not None:
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {
+                    "code": -32601,
+                    "message": f"Method '{method}' not implemented."
+                }
+            }
+        return None
+
+
+# ============================================================================
+# ASGI APPLICATION FACTORY (DUAL TRANSPORT: SSE + DIRECT JSON-RPC HTTP POST)
 # ============================================================================
 def create_mcp_asgi_app(flask_app=None) -> Starlette:
     """Constructs the unified ASGI application supporting:
-    - MCP SSE on /sse
-    - MCP SSE alias on /mcp
+    - MCP SSE stream on GET /sse, /mcp, /api/mcp
+    - MCP direct JSON-RPC POST on POST /sse, /mcp, /api/mcp (Gemini Spark, ChatGPT, Grok)
+    - OAuth protected resource discovery handling on /.well-known/oauth-protected-resource
     - Health check on /health (returning 200 OK)
     - Fallback mounting of Flask web interface and APIs
     """
@@ -878,6 +1223,62 @@ def create_mcp_asgi_app(flask_app=None) -> Starlette:
     if not sse_route:
         raise RuntimeError("FastMCP did not initialize an /sse route.")
 
+    async def handle_jsonrpc_request(request):
+        """Handles HTTP POST requests containing JSON-RPC 2.0 payloads."""
+        client_ip = getattr(request.client, 'host', 'unknown')
+        try:
+            raw_body = await request.body()
+            body_text = raw_body.decode('utf-8')
+            print(f"[MCP INCOMING POST] {request.method} {request.url.path} from {client_ip}: {body_text[:300]}", flush=True)
+
+            if not body_text.strip():
+                return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error: empty body"}}, status_code=400)
+
+            data = json.loads(body_text)
+
+            if isinstance(data, list):
+                # Batch request
+                responses = [handle_jsonrpc_sync(item) for item in data]
+                responses = [r for r in responses if r is not None]
+                return JSONResponse(responses, status_code=200)
+            else:
+                resp = handle_jsonrpc_sync(data)
+                if resp is None:
+                    return Response(status_code=204)
+                return JSONResponse(resp, status_code=200)
+
+        except json.JSONDecodeError as jde:
+            print(f"[MCP JSON PARSE ERROR]: {jde}", flush=True)
+            return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32700, "message": f"Parse error: {str(jde)}"}}, status_code=400)
+        except Exception as e:
+            print(f"[MCP POST HANDLER ERROR]: {e}", flush=True)
+            return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32603, "message": f"Internal error: {str(e)}"}}, status_code=500)
+
+    async def mcp_dual_transport_endpoint(request):
+        """Universal endpoint serving both Server-Sent Events (GET) and direct JSON-RPC (POST)."""
+        method = request.method
+        if method == "POST":
+            return await handle_jsonrpc_request(request)
+        elif method == "GET":
+            return await sse_route.endpoint(request)
+        elif method in ("HEAD", "OPTIONS"):
+            return Response(status_code=200)
+        return Response(status_code=405)
+
+    async def oauth_protected_resource_endpoint(request):
+        """RFC 9728 Protected Resource Metadata discovery handler.
+        Returning 404 cleanly signifies to MCP clients (Gemini) that this server
+        operates in public/direct unauthenticated mode without OAuth requirements.
+        """
+        client_ip = getattr(request.client, 'host', 'unknown')
+        print(f"[OAUTH DISCOVERY PROBE]: {request.method} {request.url.path} from {client_ip}", flush=True)
+        if request.method == "OPTIONS":
+            return Response(status_code=200)
+        return JSONResponse(
+            {"status": "public_mcp", "message": "This MCP server does not enforce OAuth 2.0; direct MCP tool execution is available."},
+            status_code=404
+        )
+
     async def health_endpoint(request):
         return JSONResponse({
             "status": "ok",
@@ -885,23 +1286,17 @@ def create_mcp_asgi_app(flask_app=None) -> Starlette:
             "mcp_version": "1.30.0",
             "mcp_sse_endpoint": "/sse",
             "mcp_alias_endpoint": "/mcp",
-            "tools": [
-                "list_channel_videos",
-                "get_video_details",
-                "update_video_metadata",
-                "update_video_thumbnail",
-                "optimize_and_update_video",
-                "batch_optimize_channel_videos",
-                "optimize_video_metadata",
-                "upload_to_youtube"
-            ],
+            "tools": list(MCP_TOOL_FUNCTIONS.keys()),
             "timestamp": time.time()
         }, status_code=200)
 
     unified_routes = [
-        Route("/health", endpoint=health_endpoint, methods=["GET", "HEAD"]),
-        Route("/sse", endpoint=sse_route.endpoint, methods=["GET"]),
-        Route("/mcp", endpoint=sse_route.endpoint, methods=["GET"]),
+        Route("/health", endpoint=health_endpoint, methods=["GET", "HEAD", "OPTIONS"]),
+        Route("/sse", endpoint=mcp_dual_transport_endpoint, methods=["GET", "POST", "HEAD", "OPTIONS"]),
+        Route("/mcp", endpoint=mcp_dual_transport_endpoint, methods=["GET", "POST", "HEAD", "OPTIONS"]),
+        Route("/api/mcp", endpoint=mcp_dual_transport_endpoint, methods=["GET", "POST", "HEAD", "OPTIONS"]),
+        Route("/.well-known/oauth-protected-resource", endpoint=oauth_protected_resource_endpoint, methods=["GET", "HEAD", "OPTIONS"]),
+        Route("/.well-known/oauth-protected-resource/{subpath:path}", endpoint=oauth_protected_resource_endpoint, methods=["GET", "HEAD", "OPTIONS"]),
     ]
 
     for r in mcp_sse_starlette.routes:
@@ -934,6 +1329,7 @@ def create_mcp_asgi_app(flask_app=None) -> Starlette:
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    print(f"Starting standalone MCP SSE server on 0.0.0.0:{port}...")
+    print(f"Starting standalone Universal MCP server on 0.0.0.0:{port}...")
     app = create_mcp_asgi_app()
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+
