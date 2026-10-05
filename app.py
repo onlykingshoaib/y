@@ -55,28 +55,124 @@ if not os.path.exists(TOKEN_FILE) and os.environ.get("YOUTUBE_TOKEN_JSON"):
     except Exception as e:
         print(f"Notice: Failed to write TOKEN_FILE from env: {e}")
 
-# In-memory tracking of background upload tasks
+# In-memory tracking of background upload tasks and multi-tier credential caching
 upload_tasks = {}
 OAUTH_STATES = {}
+FALLBACK_TOKEN_FILE = os.path.join(UPLOAD_FOLDER, "token.json")
+_ACTIVE_CREDENTIALS = None
+_ACTIVE_CREDENTIALS_DATA = None
+
+def handle_youtube_api_error(e: Exception) -> dict:
+    """Parses Google API HttpError and OAuth exceptions gracefully,
+    returning structured JSON error payloads for quota exhaustion, token expiry,
+    or general API failures without crashing or entering redirect loops.
+    """
+    from googleapiclient.errors import HttpError
+    if isinstance(e, HttpError):
+        status_code = getattr(getattr(e, 'resp', None), 'status', 500)
+        reason = ""
+        message = str(e)
+        try:
+            error_details = json.loads(e.content.decode('utf-8'))
+            error_obj = error_details.get('error', {})
+            errors_list = error_obj.get('errors', [])
+            if errors_list:
+                reason = errors_list[0].get('reason', '')
+            message = error_obj.get('message', str(e))
+        except Exception:
+            pass
+
+        if status_code == 403 and any(k in reason.lower() or k in message.lower() for k in ['quota', 'dailylimit', 'ratelimit']):
+            return {
+                "status": "quota_exceeded",
+                "error": "YouTube Data API quota exceeded for today. Google YouTube API quotas reset daily at midnight Pacific Time (12:00 AM PT).",
+                "code": 403,
+                "reason": "quotaExceeded",
+                "resets_at": "12:00 AM PT"
+            }
+        elif status_code == 401 or any(k in message.lower() or k in reason.lower() for k in ['invalid_grant', 'auth', 'unauthorized', 'token']):
+            return {
+                "status": "credentials_required",
+                "error": "YouTube authorization expired or revoked. Re-authentication available at /authorize.",
+                "code": 401,
+                "auth_url": "https://youtube-studio-pro.onrender.com/authorize"
+            }
+        return {
+            "status": "error",
+            "error": f"YouTube API error ({status_code}): {message}",
+            "code": status_code,
+            "reason": reason
+        }
+    elif any(k in str(e).lower() for k in ['invalid_grant', 'revoked', 'expired', 'token']):
+        return {
+            "status": "credentials_required",
+            "error": "YouTube OAuth token has expired or was revoked. Please visit /authorize to reconnect.",
+            "auth_url": "https://youtube-studio-pro.onrender.com/authorize"
+        }
+    return {
+        "status": "error",
+        "error": f"YouTube operation error: {str(e)}"
+    }
 
 def get_stored_credentials():
+    """Retrieves Google OAuth credentials across 5 persistent tiers:
+    1. Active in-memory Credentials instance
+    2. Flask session credentials (if in request context)
+    3. Primary token.json file
+    4. Fallback persistent storage file (uploads/token.json)
+    5. Environment variable YOUTUBE_TOKEN_JSON
+    Automatically refreshes expired tokens and writes updates back to all persistent storage tiers.
+    """
+    global _ACTIVE_CREDENTIALS, _ACTIVE_CREDENTIALS_DATA
     creds = None
     from flask import has_request_context
     in_request = has_request_context()
 
+    # Tier 1: In-memory cached active instance
+    if _ACTIVE_CREDENTIALS and getattr(_ACTIVE_CREDENTIALS, 'valid', False):
+        return _ACTIVE_CREDENTIALS
+
+    # Tier 2: Flask session
     if in_request and 'credentials' in session:
-        creds = Credentials(**session['credentials'])
-    elif os.path.exists(TOKEN_FILE):
+        try:
+            creds = Credentials(**session['credentials'])
+            _ACTIVE_CREDENTIALS_DATA = session['credentials']
+        except Exception:
+            creds = None
+
+    # Tier 3: Primary token.json file
+    if not creds and os.path.exists(TOKEN_FILE):
         try:
             with open(TOKEN_FILE, 'r') as f:
                 creds_data = json.load(f)
                 creds = Credentials(**creds_data)
-                if in_request:
-                    session['credentials'] = creds_data
+                _ACTIVE_CREDENTIALS_DATA = creds_data
         except Exception as e:
-            print(f"Error loading token.json: {e}")
+            print(f"Notice: Error loading primary token.json: {e}")
             creds = None
 
+    # Tier 4: Fallback persistent storage file
+    if not creds and os.path.exists(FALLBACK_TOKEN_FILE):
+        try:
+            with open(FALLBACK_TOKEN_FILE, 'r') as f:
+                creds_data = json.load(f)
+                creds = Credentials(**creds_data)
+                _ACTIVE_CREDENTIALS_DATA = creds_data
+        except Exception as e:
+            print(f"Notice: Error loading fallback token.json: {e}")
+            creds = None
+
+    # Tier 5: Environment variable fallback
+    if not creds and os.environ.get("YOUTUBE_TOKEN_JSON"):
+        try:
+            creds_data = json.loads(os.environ["YOUTUBE_TOKEN_JSON"])
+            creds = Credentials(**creds_data)
+            _ACTIVE_CREDENTIALS_DATA = creds_data
+        except Exception as e:
+            print(f"Notice: Error parsing YOUTUBE_TOKEN_JSON: {e}")
+            creds = None
+
+    # Auto-refresh expired credentials using refresh_token
     if creds and creds.expired and creds.refresh_token:
         try:
             req = google.auth.transport.requests.Request()
@@ -91,11 +187,34 @@ def get_stored_credentials():
             }
             if in_request:
                 session['credentials'] = session_data
-            with open(TOKEN_FILE, 'w') as f:
-                json.dump(session_data, f)
+
+            _ACTIVE_CREDENTIALS = creds
+            _ACTIVE_CREDENTIALS_DATA = session_data
+
+            # Persist to primary and fallback storage tiers
+            try:
+                with open(TOKEN_FILE, 'w') as f:
+                    json.dump(session_data, f)
+            except Exception as pe:
+                print(f"Notice: Failed to save refreshed token to primary file: {pe}")
+
+            try:
+                with open(FALLBACK_TOKEN_FILE, 'w') as ff:
+                    json.dump(session_data, ff)
+            except Exception as fe:
+                print(f"Notice: Failed to save refreshed token to fallback file: {fe}")
+
+            print(f"[YOUTUBE_OAUTH_TOKEN_BACKUP] {json.dumps(session_data)}", flush=True)
+
         except Exception as e:
             print(f"Token refresh failed: {e}")
             return None
+
+    if creds and (creds.valid or creds.refresh_token):
+        _ACTIVE_CREDENTIALS = creds
+        if in_request and _ACTIVE_CREDENTIALS_DATA and 'credentials' not in session:
+            session['credentials'] = _ACTIVE_CREDENTIALS_DATA
+
     return creds
 
 HTML_MAIN = """
@@ -3143,11 +3262,11 @@ def authorize():
         redirect_uri=url_for('oauth2callback', _external=True)
     )
 
-    # Prompt select_account so the user can choose ANY email or add a new account freely
+    # Explicitly enforce offline access and consent prompt so Google always issues a refresh token
     auth_params = {
         'access_type': 'offline',
         'include_granted_scopes': 'true',
-        'prompt': 'select_account consent'
+        'prompt': 'consent'
     }
 
     login_hint = request.args.get('login_hint')
@@ -3234,8 +3353,23 @@ def oauth2callback():
     session['user_email'] = user_email
     session.pop('active_channel_id', None)
 
-    with open(TOKEN_FILE, 'w') as f:
-        json.dump(creds_dict, f)
+    global _ACTIVE_CREDENTIALS, _ACTIVE_CREDENTIALS_DATA
+    _ACTIVE_CREDENTIALS = credentials
+    _ACTIVE_CREDENTIALS_DATA = creds_dict
+
+    try:
+        with open(TOKEN_FILE, 'w') as f:
+            json.dump(creds_dict, f)
+    except Exception as te:
+        print(f"Notice: Failed to save to TOKEN_FILE: {te}")
+
+    try:
+        with open(FALLBACK_TOKEN_FILE, 'w') as ff:
+            json.dump(creds_dict, ff)
+    except Exception as fe:
+        print(f"Notice: Failed to save to FALLBACK_TOKEN_FILE: {fe}")
+
+    print(f"[YOUTUBE_OAUTH_TOKEN_BACKUP] {json.dumps(creds_dict)}", flush=True)
     return redirect('/')
 
 @app.route('/logout')
@@ -3335,7 +3469,9 @@ def channel_info():
             'allChannels': all_channels
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        err = handle_youtube_api_error(e)
+        code = 429 if err.get("status") == "quota_exceeded" else (err.get("code") or 400)
+        return jsonify(err), code
 
 @app.route('/api/recent_videos')
 def recent_videos():
@@ -3375,7 +3511,9 @@ def recent_videos():
             })
         return jsonify(video_list)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        err = handle_youtube_api_error(e)
+        code = 429 if err.get("status") == "quota_exceeded" else (err.get("code") or 400)
+        return jsonify(err), code
 
 # ==============================================
 # VIDEO EDITING & THUMBNAIL ENDPOINTS
@@ -3416,7 +3554,9 @@ def get_video_api(video_id):
             'publishedAt': snip.get('publishedAt', '')
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        err = handle_youtube_api_error(e)
+        code = 429 if err.get("status") == "quota_exceeded" else (err.get("code") or 400)
+        return jsonify(err), code
 
 
 @app.route('/api/video/update', methods=['POST'])
@@ -3482,7 +3622,9 @@ def update_video_api():
             }
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        err = handle_youtube_api_error(e)
+        code = 429 if err.get("status") == "quota_exceeded" else (err.get("code") or 400)
+        return jsonify(err), code
 
 
 @app.route('/api/video/thumbnail', methods=['POST'])
@@ -3518,7 +3660,9 @@ def update_thumbnail_api():
         err_msg = str(e)
         if 'verified' in err_msg.lower() or 'forbidden' in err_msg.lower():
             return jsonify({'error': 'Custom thumbnail upload requires a phone-verified YouTube channel.'}), 403
-        return jsonify({'error': str(e)}), 500
+        err = handle_youtube_api_error(e)
+        code = 429 if err.get("status") == "quota_exceeded" else (err.get("code") or 400)
+        return jsonify(err), code
     finally:
         if os.path.exists(thumb_path):
             try:

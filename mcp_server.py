@@ -148,14 +148,8 @@ def list_channel_videos(max_results: int = 15, **kwargs) -> str:
         }, indent=2)
 
     except Exception as e:
-        err_msg = str(e)
-        if "invalid_grant" in err_msg or "expired" in err_msg or "revoked" in err_msg:
-            return json.dumps({
-                "status": "credentials_required",
-                "message": "YouTube token has expired or was revoked. Please re-authenticate at https://youtube-studio-pro.onrender.com/login",
-                "auth_url": "https://youtube-studio-pro.onrender.com/login"
-            }, indent=2)
-        return json.dumps({"status": "error", "message": f"Failed to list videos: {err_msg}"})
+        import app as main_app
+        return json.dumps(main_app.handle_youtube_api_error(e), indent=2)
 
 
 # ============================================================================
@@ -179,8 +173,8 @@ def get_video_details(video_id: str, **kwargs) -> str:
     if not youtube:
         return json.dumps({
             "status": "credentials_required",
-            "message": "YouTube OAuth credentials required. Visit https://youtube-studio-pro.onrender.com/login",
-            "auth_url": "https://youtube-studio-pro.onrender.com/login"
+            "message": "YouTube OAuth credentials required. Visit https://youtube-studio-pro.onrender.com/authorize",
+            "auth_url": "https://youtube-studio-pro.onrender.com/authorize"
         }, indent=2)
 
     try:
@@ -212,7 +206,8 @@ def get_video_details(video_id: str, **kwargs) -> str:
             "watch_url": f"https://youtu.be/{clean_id}"
         }, indent=2)
     except Exception as e:
-        return json.dumps({"status": "error", "message": f"Failed to get video details: {str(e)}"})
+        import app as main_app
+        return json.dumps(main_app.handle_youtube_api_error(e), indent=2)
 
 
 # ============================================================================
@@ -301,8 +296,8 @@ def update_video_metadata(
         }, indent=2)
 
     except Exception as e:
-        err_str = str(e)
-        return json.dumps({"status": "error", "message": f"YouTube API update failed: {err_str}"})
+        import app as main_app
+        return json.dumps(main_app.handle_youtube_api_error(e), indent=2)
 
 
 # ============================================================================
@@ -337,8 +332,8 @@ def update_video_thumbnail(
     if not youtube:
         return json.dumps({
             "status": "credentials_required",
-            "message": "YouTube OAuth credentials required. Visit https://youtube-studio-pro.onrender.com/login",
-            "auth_url": "https://youtube-studio-pro.onrender.com/login"
+            "message": "YouTube OAuth credentials required. Visit https://youtube-studio-pro.onrender.com/authorize",
+            "auth_url": "https://youtube-studio-pro.onrender.com/authorize"
         }, indent=2)
 
     local_file = None
@@ -385,7 +380,8 @@ def update_video_thumbnail(
                 "status": "error",
                 "message": "Setting custom thumbnails requires a phone-verified YouTube channel. Please verify channel in official YouTube Studio."
             })
-        return json.dumps({"status": "error", "message": f"Failed to set thumbnail: {err_msg}"})
+        import app as main_app
+        return json.dumps(main_app.handle_youtube_api_error(e), indent=2)
 
 
 # ============================================================================
